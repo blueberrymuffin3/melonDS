@@ -117,9 +117,14 @@ elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
 endif()
 
 option(BUILD_QT_SDL "Build Qt/SDL frontend" ON)
+option(BUILD_SWITCH "Build Switch frontend" ON)
 
 add_subdirectory(src)
 
 if (BUILD_QT_SDL)
 	add_subdirectory(src/frontend/qt_sdl)
+endif()
+
+if (BUILD_SWITCH)
+    add_subdirectory(src/frontend/switch)
 endif()

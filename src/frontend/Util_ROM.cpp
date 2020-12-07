@@ -81,6 +81,16 @@ void DeInit_ROM()
 void SetupSRAMPath(int slot)
 {
     strncpy(SRAMPath[slot], ROMPath[slot], 1023);
+    strncat(SRAMPath[slot], ".sav", 1023);
+    // keep compability with the old file names
+    FILE* f = fopen(SRAMPath[slot], "rb");
+    if (f)
+    {
+        fclose(f);
+        return;
+    }
+
+    strncpy(SRAMPath[slot], ROMPath[slot], 1023);
     SRAMPath[slot][1023] = '\0';
     strncpy(SRAMPath[slot] + strlen(ROMPath[slot]) - 3, "sav", 3);
 }

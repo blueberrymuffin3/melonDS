@@ -110,6 +110,9 @@ int ImportSRAM(const char* filename);
 void EnableCheats(bool enable);
 
 
+
+void M23_Transform(float* m, float& x, float& y);
+
 // setup the display layout based on the provided display size and parameters
 // * screenWidth/screenHeight: size of the host display
 // * screenLayout: how the DS screens are laid out

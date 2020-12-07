@@ -31,6 +31,19 @@
 
 #include <stdlib.h>
 
+#if defined(__SWITCH__)
+#include <switch.h>
+#include "frontend/switch/FaultHandler.h"
+#elif defined(_WIN32)
+#include <windows.h>
+#else
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <signal.h>
+#endif
+
 /*
     We're handling fastmem here.
 
@@ -75,9 +88,6 @@ extern "C"
 {
     
 void ARM_RestoreContext(u64* registers) __attribute__((noreturn));
-
-extern char __start__;
-extern char __rodata_start;
 
 alignas(16) u8 __nx_exception_stack[0x8000];
 u64 __nx_exception_stack_size = 0x8000;
