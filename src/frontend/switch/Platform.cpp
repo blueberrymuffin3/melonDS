@@ -62,10 +62,14 @@ void ThreadEntry(void* param)
 
 #define STACK_SIZE (1024 * 1024 * 4)
 
+int nextCore = 0;
+
 Thread* Thread_Create(void (*func)())
 {
     ::Thread* thread = new ::Thread();
-    threadCreate(thread, ThreadEntry, (void*)func, NULL, STACK_SIZE, 0x1F, 2);
+    threadCreate(thread, ThreadEntry, (void*)func, NULL, STACK_SIZE, 0x1F, nextCore);
+    // this relies on the order of thread creation, very bad
+    nextCore = 2;
     threadStart(thread);
     return (Thread*)thread;
 }

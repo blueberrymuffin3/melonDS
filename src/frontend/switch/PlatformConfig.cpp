@@ -16,6 +16,8 @@ int ScreenSwap;
 int ScreenSizing;
 int Filtering;
 int IntegerScaling;
+int ScreenAspectTop;
+int ScreenAspectBot;
 
 int SavestateRelocSRAM;
 
@@ -49,12 +51,14 @@ ConfigEntry PlatformConfigFile[] =
     {"ScreenSizing",            0, &ScreenSizing,           0, NULL, 0},
     {"Filtering",               0, &Filtering,              1, NULL, 0},
     {"IntegerScaling",          0, &IntegerScaling,         0, NULL, 0},
+    {"ScreenAspectTop",         0, &ScreenAspectTop,        0, NULL, 0},
+    {"ScreenAspectBot",         0, &ScreenAspectBot,        0, NULL, 0},
 
-    {"LastROMPath0",            1, LastROMPath[0],            0, "",   511},
-    {"LastROMPath1",            1, LastROMPath[1],            0, "",   511},
-    {"LastROMPath2",            1, LastROMPath[2],            0, "",   511},
-    {"LastROMPath3",            1, LastROMPath[3],            0, "",   511},
-    {"LastROMPath4",            1, LastROMPath[4],            0, "",   511},
+    {"LastROMPath0",            1, LastROMPath[0],          0, "",   511},
+    {"LastROMPath1",            1, LastROMPath[1],          0, "",   511},
+    {"LastROMPath2",            1, LastROMPath[2],          0, "",   511},
+    {"LastROMPath3",            1, LastROMPath[3],          0, "",   511},
+    {"LastROMPath4",            1, LastROMPath[4],          0, "",   511},
 
     {"LastROMFolder",           1, LastROMFolder,           0, "/", 511},
 

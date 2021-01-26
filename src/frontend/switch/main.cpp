@@ -76,7 +76,9 @@ u32 CurrentFrontBuffer;
 int FrametimeHistogramNextValue;
 float FrametimeHistogram[120];
 
-Gfx::Vector2f ScreenPoints[2][4];
+int ScreensVisible, FirstBotScreen;
+Gfx::Vector2f ScreenPoints[Frontend::MaxScreenTransforms][4];
+int ScreenKinds[Frontend::MaxScreenTransforms];
 
 Mutex EmuThreadLock;
 CondVar FrameStartCond;
@@ -421,9 +423,6 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
         PlatformKeysHeld |= keysDown;
         PlatformKeysHeld &= ~keysUp;
 
-        if (PlatformKeysHeld & (HidNpadButton_StickL))
-            asm volatile ("brk #0\n");
-
         if ((PlatformKeysHeld & (HidNpadButton_ZL|HidNpadButton_ZR)) == (HidNpadButton_ZL|HidNpadButton_ZR))
         {
             SetPause(true);
@@ -471,159 +470,162 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
                 break;
             }
 
-            Gfx::Vector2f botScreenSize = {ScreenPoints[1][1].X - ScreenPoints[1][0].X, ScreenPoints[1][2].Y - ScreenPoints[1][0].Y};
-            Gfx::Vector2f botScreenCenter = ScreenPoints[1][0] + botScreenSize * 0.5f;
-            if (Config::TouchscreenMode < 2)
+            HidTouchScreenState touchPosition;
+            if (FirstBotScreen != -1)
             {
-                HidAnalogStickState rstick = padGetStickPos(&Pad, 1);
-
-                Gfx::Vector2f rstickVec = {(float)rstick.x / JOYSTICK_MAX, -(float)rstick.y / JOYSTICK_MAX};
-
-                touchUseCursor = true;
-                if (Config::TouchscreenMode == 0) // mouse mode
+                Gfx::Vector2f botScreenSize = {ScreenPoints[1][1].X - ScreenPoints[1][0].X, ScreenPoints[1][2].Y - ScreenPoints[1][0].Y};
+                Gfx::Vector2f botScreenCenter = ScreenPoints[1][0] + botScreenSize * 0.5f;
+                if (Config::TouchscreenMode < 2)
                 {
-                    if (rstickVec.LengthSqr() < 0.1f * 0.1f)
-                        TouchCursorVelocity = {0.f, 0.f};
-                    else
-                        UseRealTouchscreen = false;
+                    HidAnalogStickState rstick = padGetStickPos(&Pad, 1);
 
-                    float maxSpeed = std::max(botScreenSize.X, botScreenSize.Y) * 1.5f;
-                    TouchCursorVelocity += rstickVec * std::max(botScreenSize.X, botScreenSize.Y) * 0.125f;
-                    TouchCursorVelocity = TouchCursorVelocity.Clamp({-maxSpeed, -maxSpeed}, {maxSpeed, maxSpeed});
+                    Gfx::Vector2f rstickVec = {(float)rstick.x / JOYSTICK_MAX, -(float)rstick.y / JOYSTICK_MAX};
 
-                    // allow for quick turns
-                    if ((TouchCursorVelocity.X > 0.f && rstick.x < 0) || (TouchCursorVelocity.X < 0.f && rstick.x > 0))
-                        TouchCursorVelocity.X = 0.f;
-                    if ((TouchCursorVelocity.Y > 0.f && rstick.y > 0) || (TouchCursorVelocity.Y < 0.f && rstick.y < 0))
-                        TouchCursorVelocity.Y = 0.f;
-                    TouchCursorPosition += TouchCursorVelocity * Gfx::AnimationTimestep;
-                }
-                else // offset mode
-                {
-                    // project ray from screen origin with
-                    Gfx::Vector2f direction = rstickVec;
-                    Gfx::Vector2f origin = botScreenCenter;
-
-                    if (rstickVec.LengthSqr() < 0.1f * 0.1f)
+                    touchUseCursor = true;
+                    if (Config::TouchscreenMode == 0) // mouse mode
                     {
-                        TouchCursorPosition = origin;
+                        if (rstickVec.LengthSqr() < 0.1f * 0.1f)
+                            TouchCursorVelocity = {0.f, 0.f};
+                        else
+                            UseRealTouchscreen = false;
+
+                        float maxSpeed = std::max(botScreenSize.X, botScreenSize.Y) * 1.5f;
+                        TouchCursorVelocity += rstickVec * std::max(botScreenSize.X, botScreenSize.Y) * 0.125f;
+                        TouchCursorVelocity = TouchCursorVelocity.Clamp({-maxSpeed, -maxSpeed}, {maxSpeed, maxSpeed});
+
+                        // allow for quick turns
+                        if ((TouchCursorVelocity.X > 0.f && rstick.x < 0) || (TouchCursorVelocity.X < 0.f && rstick.x > 0))
+                            TouchCursorVelocity.X = 0.f;
+                        if ((TouchCursorVelocity.Y > 0.f && rstick.y > 0) || (TouchCursorVelocity.Y < 0.f && rstick.y < 0))
+                            TouchCursorVelocity.Y = 0.f;
+                        TouchCursorPosition += TouchCursorVelocity * Gfx::AnimationTimestep;
                     }
-                    else
+                    else // offset mode
                     {
-                        UseRealTouchscreen = false;
+                        // project ray from screen origin with
+                        Gfx::Vector2f direction = rstickVec;
+                        Gfx::Vector2f origin = botScreenCenter;
 
-                        // we project the ray from the center of the bottom screen with the direction of the analog stick
-                        // onto the border of the bottom screen so we can calculate the distance
-                        float topX = origin.X + direction.X * ((ScreenPoints[1][0].Y - origin.Y) / direction.Y);
-                        float bottomX = origin.X + direction.X * ((ScreenPoints[1][2].Y - origin.Y) / direction.Y);
-                        float leftY = origin.Y + direction.Y * ((ScreenPoints[1][0].X - origin.X) / direction.X);
-                        float rightY = origin.Y + direction.Y * ((ScreenPoints[1][1].X - origin.X) / direction.X);
+                        if (rstickVec.LengthSqr() < 0.1f * 0.1f)
+                        {
+                            TouchCursorPosition = origin;
+                        }
+                        else
+                        {
+                            UseRealTouchscreen = false;
 
-                        Gfx::Vector2f hitPoint;
-                        if (topX >= ScreenPoints[1][0].X && topX < ScreenPoints[1][1].X)
-                            hitPoint = {topX, ScreenPoints[1][0].Y};
-                        else if (bottomX >= ScreenPoints[1][0].X && bottomX < ScreenPoints[1][1].X)
-                            hitPoint = {bottomX, ScreenPoints[1][2].Y};
-                        else if (leftY >= ScreenPoints[1][0].Y && leftY < ScreenPoints[1][2].Y)
-                            hitPoint = {ScreenPoints[1][0].X, leftY};
-                        else if (rightY >= ScreenPoints[1][0].Y && rightY < ScreenPoints[1][2].Y)
-                            hitPoint = {ScreenPoints[1][1].X, rightY};
+                            // we project the ray from the center of the bottom screen with the direction of the analog stick
+                            // onto the border of the bottom screen so we can calculate the distance
+                            float topX = origin.X + direction.X * ((ScreenPoints[1][0].Y - origin.Y) / direction.Y);
+                            float bottomX = origin.X + direction.X * ((ScreenPoints[1][2].Y - origin.Y) / direction.Y);
+                            float leftY = origin.Y + direction.Y * ((ScreenPoints[1][0].X - origin.X) / direction.X);
+                            float rightY = origin.Y + direction.Y * ((ScreenPoints[1][1].X - origin.X) / direction.X);
 
-                        TouchCursorPosition = origin + rstickVec * sqrtf((hitPoint - origin).LengthSqr());
-                    }
-                }
-            }
-            else
-            {
-                touchUseCursor = true;
-                UseRealTouchscreen = false;
+                            Gfx::Vector2f hitPoint;
+                            if (topX >= ScreenPoints[1][0].X && topX < ScreenPoints[1][1].X)
+                                hitPoint = {topX, ScreenPoints[1][0].Y};
+                            else if (bottomX >= ScreenPoints[1][0].X && bottomX < ScreenPoints[1][1].X)
+                                hitPoint = {bottomX, ScreenPoints[1][2].Y};
+                            else if (leftY >= ScreenPoints[1][0].Y && leftY < ScreenPoints[1][2].Y)
+                                hitPoint = {ScreenPoints[1][0].X, leftY};
+                            else if (rightY >= ScreenPoints[1][0].Y && rightY < ScreenPoints[1][2].Y)
+                                hitPoint = {ScreenPoints[1][1].X, rightY};
 
-                HidSixAxisSensorState sixaxisValues;
-                u32 styleSet = padGetStyleSet(&Pad);
-
-                float xAngle, yAngle;
-                if (styleSet & HidNpadStyleTag_NpadHandheld)
-                {
-                    hidGetSixAxisSensorStates(ConsoleSixAxisHandle, &sixaxisValues, 1);
-                    float up[3];
-                    xv3_cpy(up, sixaxisValues.direction.direction[2]);
-                    xv_norm(up, up, 3);
-
-                    switch (Config::GlobalRotation)
-                    {
-                    case 0:
-                        xAngle = xv3_dot(up, GyroCalibrationRight);
-                        yAngle = xv3_dot(up, GyroCalibrationForward);
-                        break;
-                    case 1:
-                        xAngle = -(xv3_dot(up, GyroCalibrationForward));
-                        yAngle = xv3_dot(up, GyroCalibrationRight);
-                        break;
-                    case 2:
-                        xAngle = -(xv3_dot(up, GyroCalibrationRight));
-                        yAngle = -(xv3_dot(up, GyroCalibrationForward));
-                        break;
-                    case 3:
-                        xAngle = xv3_dot(up, GyroCalibrationForward);
-                        yAngle = -(xv3_dot(up, GyroCalibrationRight));
-                        break;
+                            TouchCursorPosition = origin + rstickVec * sqrtf((hitPoint - origin).LengthSqr());
+                        }
                     }
                 }
                 else
                 {
-                    HidSixAxisSensorHandle handle;
-                    int preferedPad = Config::LeftHandedMode ? 0 : 1;
-                    u32 preferedPadMask = Config::LeftHandedMode ? HidNpadAttribute_IsLeftConnected : HidNpadAttribute_IsRightConnected;
-                    if (styleSet & HidNpadStyleTag_NpadFullKey)
-                        handle = FullKeySixAxisHandle;
-                    else if (padGetAttributes(&Pad) & preferedPadMask)
-                        handle = JoyconSixaxisHandles[preferedPad];
+                    touchUseCursor = true;
+                    UseRealTouchscreen = false;
+
+                    HidSixAxisSensorState sixaxisValues;
+                    u32 styleSet = padGetStyleSet(&Pad);
+
+                    float xAngle, yAngle;
+                    if (styleSet & HidNpadStyleTag_NpadHandheld)
+                    {
+                        hidGetSixAxisSensorStates(ConsoleSixAxisHandle, &sixaxisValues, 1);
+                        float up[3];
+                        xv3_cpy(up, sixaxisValues.direction.direction[2]);
+                        xv_norm(up, up, 3);
+
+                        switch (Config::GlobalRotation)
+                        {
+                        case 0:
+                            xAngle = xv3_dot(up, GyroCalibrationRight);
+                            yAngle = xv3_dot(up, GyroCalibrationForward);
+                            break;
+                        case 1:
+                            xAngle = -(xv3_dot(up, GyroCalibrationForward));
+                            yAngle = xv3_dot(up, GyroCalibrationRight);
+                            break;
+                        case 2:
+                            xAngle = -(xv3_dot(up, GyroCalibrationRight));
+                            yAngle = -(xv3_dot(up, GyroCalibrationForward));
+                            break;
+                        case 3:
+                            xAngle = xv3_dot(up, GyroCalibrationForward);
+                            yAngle = -(xv3_dot(up, GyroCalibrationRight));
+                            break;
+                        }
+                    }
                     else
-                        handle = JoyconSixaxisHandles[preferedPad ^ 1];
-                    hidGetSixAxisSensorStates(handle, &sixaxisValues, 1);
+                    {
+                        HidSixAxisSensorHandle handle;
+                        int preferedPad = Config::LeftHandedMode ? 0 : 1;
+                        u32 preferedPadMask = Config::LeftHandedMode ? HidNpadAttribute_IsLeftConnected : HidNpadAttribute_IsRightConnected;
+                        if (styleSet & HidNpadStyleTag_NpadFullKey)
+                            handle = FullKeySixAxisHandle;
+                        else if (padGetAttributes(&Pad) & preferedPadMask)
+                            handle = JoyconSixaxisHandles[preferedPad];
+                        else
+                            handle = JoyconSixaxisHandles[preferedPad ^ 1];
+                        hidGetSixAxisSensorStates(handle, &sixaxisValues, 1);
 
-                    float forward[3];
-                    xv3_cpy(forward, sixaxisValues.direction.direction[1]);
-                    xv_norm(forward, forward, 3);
+                        float forward[3];
+                        xv3_cpy(forward, sixaxisValues.direction.direction[1]);
+                        xv_norm(forward, forward, 3);
 
-                    xAngle = xv3_dot(forward, GyroCalibrationRight);
-                    yAngle = xv3_dot(forward, GyroCalibrationUp);
+                        xAngle = xv3_dot(forward, GyroCalibrationRight);
+                        yAngle = xv3_dot(forward, GyroCalibrationUp);
+                    }
+
+                    TouchCursorPosition = botScreenCenter
+                        + Gfx::Vector2f{xAngle / (float)M_PI * 10.f, -yAngle / (float)M_PI * 10.f} * std::max(botScreenSize.X, botScreenSize.Y);
+
+                    if (keysDown & (!Config::LeftHandedMode
+                        ? HidNpadButton_ZL : HidNpadButton_ZR))
+                        RecalibrateGyro(sixaxisValues);
                 }
 
-                TouchCursorPosition = botScreenCenter
-                    + Gfx::Vector2f{xAngle / (float)M_PI * 10.f, -yAngle / (float)M_PI * 10.f} * std::max(botScreenSize.X, botScreenSize.Y);
+                if (hidGetTouchScreenStates(&touchPosition, 1) && touchPosition.count > 0)
+                {
+                    touchUseCursor = false;
+                    UseRealTouchscreen = true;
+                }
 
-                if (keysDown & (!Config::LeftHandedMode
-                    ? HidNpadButton_ZL : HidNpadButton_ZR))
-                    RecalibrateGyro(sixaxisValues);
-            }
-
-            HidTouchScreenState touchPosition;
-            if (hidGetTouchScreenStates(&touchPosition, 1) && touchPosition.count > 0)
-            {
-                touchUseCursor = false;
-                UseRealTouchscreen = true;
-            }
-
-            if (TouchCursorPosition.X < ScreenPoints[1][0].X)
-            {
-                TouchCursorPosition.X = ScreenPoints[1][0].X - 1.f;
-                touchUseCursor = false;
-            }
-            if (TouchCursorPosition.X >= ScreenPoints[1][1].X)
-            {
-                TouchCursorPosition.X = ScreenPoints[1][1].X + 1.f;
-                touchUseCursor = false;
-            }
-            if (TouchCursorPosition.Y < ScreenPoints[1][0].Y)
-            {
-                TouchCursorPosition.Y = ScreenPoints[1][0].Y - 1.f;
-                touchUseCursor = false;
-            }
-            if (TouchCursorPosition.Y >= ScreenPoints[1][2].Y)
-            {
-                TouchCursorPosition.Y = ScreenPoints[1][2].Y + 1.f;
-                touchUseCursor = false;
+                if (TouchCursorPosition.X < ScreenPoints[1][0].X)
+                {
+                    TouchCursorPosition.X = ScreenPoints[1][0].X - 1.f;
+                    touchUseCursor = false;
+                }
+                if (TouchCursorPosition.X >= ScreenPoints[1][1].X)
+                {
+                    TouchCursorPosition.X = ScreenPoints[1][1].X + 1.f;
+                    touchUseCursor = false;
+                }
+                if (TouchCursorPosition.Y < ScreenPoints[1][0].Y)
+                {
+                    TouchCursorPosition.Y = ScreenPoints[1][0].Y - 1.f;
+                    touchUseCursor = false;
+                }
+                if (TouchCursorPosition.Y >= ScreenPoints[1][2].Y)
+                {
+                    TouchCursorPosition.Y = ScreenPoints[1][2].Y + 1.f;
+                    touchUseCursor = false;
+                }
             }
 
             u32 keyMask = 0xFFF;
@@ -648,6 +650,12 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
                 case 3:
                     Config::ScreenSizing = AutoScreenSizing == 2 ? 1 : 2;
                     break;
+                case 4:
+                    Config::ScreenSizing = 5;
+                    break;
+                case 5:
+                    Config::ScreenSizing = 4;
+                    break;
                 }
                 UpdateScreenLayout();
             }
@@ -657,31 +665,34 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
                 AutoScreenSizing = LastAutoScreenSizing;
             }
 
-            if (!UseRealTouchscreen)
+            if (FirstBotScreen != -1)
             {
-                u32 touchButtonMask = !Config::LeftHandedMode ? HidNpadButton_ZR : HidNpadButton_ZL;
-                if (Config::TouchscreenClickMode == 0)
-                    TouchHeld = PlatformKeysHeld & touchButtonMask;
-                else if (keysDown & touchButtonMask)
-                    TouchHeld ^= true;
+                if (!UseRealTouchscreen)
+                {
+                    u32 touchButtonMask = !Config::LeftHandedMode ? HidNpadButton_ZR : HidNpadButton_ZL;
+                    if (Config::TouchscreenClickMode == 0)
+                        TouchHeld = PlatformKeysHeld & touchButtonMask;
+                    else if (keysDown & touchButtonMask)
+                        TouchHeld ^= true;
 
-                TouchFinalPositionX = (int)(TouchCursorPosition.X * TouchScale);
-                TouchFinalPositionY = (int)(TouchCursorPosition.Y * TouchScale);
-                Frontend::GetTouchCoords(TouchFinalPositionX, TouchFinalPositionY);
-                TouchDown = TouchHeld
-                    && TouchFinalPositionX >= 0 && TouchFinalPositionX < 256
-                    && TouchFinalPositionY >= 0 && TouchFinalPositionY < 192;
-            }
-            else
-            {
-                Gfx::Rotate90Deg(touchPosition.touches[0].x, touchPosition.touches[0].y, touchPosition.touches[0].x, touchPosition.touches[0].y, Config::GlobalRotation);
-                TouchFinalPositionX = (int)(touchPosition.touches[0].x * TouchScale);
-                TouchFinalPositionY = (int)(touchPosition.touches[0].y * TouchScale);
-                Frontend::GetTouchCoords(TouchFinalPositionX, TouchFinalPositionY);
-                TouchDown =
-                    touchPosition.count > 0
-                    && TouchFinalPositionX >= 0 && TouchFinalPositionX < 256
-                    && TouchFinalPositionY >= 0 && TouchFinalPositionY < 192;
+                    TouchFinalPositionX = (int)(TouchCursorPosition.X * TouchScale);
+                    TouchFinalPositionY = (int)(TouchCursorPosition.Y * TouchScale);
+                    Frontend::GetTouchCoords(TouchFinalPositionX, TouchFinalPositionY);
+                    TouchDown = TouchHeld
+                        && TouchFinalPositionX >= 0 && TouchFinalPositionX < 256
+                        && TouchFinalPositionY >= 0 && TouchFinalPositionY < 192;
+                }
+                else
+                {
+                    Gfx::Rotate90Deg(touchPosition.touches[0].x, touchPosition.touches[0].y, touchPosition.touches[0].x, touchPosition.touches[0].y, Config::GlobalRotation);
+                    TouchFinalPositionX = (int)(touchPosition.touches[0].x * TouchScale);
+                    TouchFinalPositionY = (int)(touchPosition.touches[0].y * TouchScale);
+                    Frontend::GetTouchCoords(TouchFinalPositionX, TouchFinalPositionY);
+                    TouchDown =
+                        touchPosition.count > 0
+                        && TouchFinalPositionX >= 0 && TouchFinalPositionX < 256
+                        && TouchFinalPositionY >= 0 && TouchFinalPositionY < 192;
+                }
             }
 
             LimitFramerate = Config::LimitFramerate;
@@ -705,9 +716,9 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
         if (Config::Filtering == 1)
             Gfx::SetSmoothEdges(true);
         Gfx::SetSampler((Config::Filtering == 0 ? Gfx::sampler_Nearest : Gfx::sampler_Linear) | Gfx::sampler_ClampToEdge);
-        for (int i = 0; i < 2; i++)
+        for (int i = 0; i < ScreensVisible; i++)
         {
-            Gfx::DrawRectangle(FramebufferTextures[i], 
+            Gfx::DrawRectangle(FramebufferTextures[ScreenKinds[i]], 
                 ScreenPoints[i][0], ScreenPoints[i][1],
                 ScreenPoints[i][2], ScreenPoints[i][3],
                 {0.f, 0.f}, {256.f, 192.f});
@@ -911,17 +922,19 @@ void UpdateScreenLayout()
     if ((Config::GlobalRotation % 2) == 1)
         std::swap(screenWidth, screenHeight);
     const int screengap[] = {0, 1, 8, 64, 90, 128};
+    const float aspectratios[] = {1, (16.f/9.f)/(4.f/3.f)};
     Frontend::SetupScreenLayout(screenWidth, screenHeight,
         Config::ScreenLayout,
         Config::ScreenRotation,
         Config::ScreenSizing == 3 ? AutoScreenSizing : Config::ScreenSizing,
         screengap[Config::ScreenGap],
         Config::IntegerScaling,
-        Config::ScreenSwap);
-    float topMatrix[6], bottomMatrix[6];
-    Frontend::GetScreenTransforms(topMatrix, bottomMatrix);
-    DeriveScreenPoints(topMatrix, ScreenPoints[0], invTouchScale);
-    DeriveScreenPoints(bottomMatrix, ScreenPoints[1], invTouchScale);
+        Config::ScreenSwap,
+        aspectratios[Config::ScreenAspectTop], aspectratios[Config::ScreenAspectBot]);
+    float matrices[Frontend::MaxScreenTransforms][6];
+    ScreensVisible = Frontend::GetScreenTransforms(matrices[0], ScreenKinds);
+    for (int i = 0; i < ScreensVisible; i++)
+        DeriveScreenPoints(matrices[i], ScreenPoints[i], invTouchScale);
 }
 
 }
