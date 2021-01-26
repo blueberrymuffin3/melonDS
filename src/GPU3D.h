@@ -110,6 +110,7 @@ void ExecuteCommand();
 
 s32 CyclesToRunFor();
 void Run();
+void RunStall();
 void CheckFIFOIRQ();
 void CheckFIFODMA();
 
@@ -123,6 +124,7 @@ void SetRenderXPos(u16 xpos);
 u32* GetLine(int line);
 
 void WriteToGXFIFO(u32 val);
+void WriteBatchToGXFIFO(u32* values, u32 count);
 
 u8 Read8(u32 addr);
 u16 Read16(u32 addr);

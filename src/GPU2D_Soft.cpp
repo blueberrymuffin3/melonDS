@@ -752,7 +752,7 @@ void GPU2D_Soft::DrawScanline_BGOBJ(u32 line)
     }
 
     if (DispCnt & 0xE000)
-        CalculateWindowMask(line);
+        CalculateWindowMask(line, WindowMask, OBJWindow);
     else
         memset(WindowMask, 0xFF, 256);
 

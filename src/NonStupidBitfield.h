@@ -16,7 +16,7 @@ struct NonStupidBitField
 {
     static_assert((Size % 8) == 0, "bitfield size must be a multiple of 8");
     static const u32 DataLength = Size / 8;
-    u8 Data[DataLength];
+    u8 Data[DataLength] __attribute__((aligned (8)));
 
     struct Ref
     {
@@ -146,6 +146,15 @@ struct NonStupidBitField
         {
             Data[i] &= other.Data[i];
         }
+        return *this;
+    }
+
+    template<u32 OtherSize>
+    NonStupidBitField& operator=(const NonStupidBitField<OtherSize>& other)
+    {
+        memcpy(Data, other.Data, std::min(other.DataLength, DataLength));
+        if (Size > OtherSize)
+            memset(Data + other.DataLength, 0, DataLength - other.DataLength);
         return *this;
     }
 };

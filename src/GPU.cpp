@@ -37,7 +37,6 @@ bool RunFIFO;
 
 u16 DispStat[2], VMatch[2];
 
-u8 Palette[2*1024];
 u8 OAM[2*1024];
 
 u8 VRAM_A[128*1024];
@@ -134,21 +133,23 @@ u8 VRAMFlat_BBG[128*1024];
 u8 VRAMFlat_AOBJ[256*1024];
 u8 VRAMFlat_BOBJ[128*1024];
 
-u8 VRAMFlat_ABGExtPal[32*1024];
-u8 VRAMFlat_BBGExtPal[32*1024];
-u8 VRAMFlat_AOBJExtPal[8*1024];
-u8 VRAMFlat_BOBJExtPal[8*1024];
-
 u8 VRAMFlat_Texture[512*1024];
 u8 VRAMFlat_TexPal[128*1024];
 
 u32 OAMDirty;
 u32 PaletteDirty;
 
+u8 AllPaletteMemory[2*1024+BGExtPalSize*2+OBJExtPalSize*2];
+
 bool Init()
 {
+#ifndef NEONSOFTGPU_ENABLED
     GPU2D_A = new GPU2D_Soft(0);
     GPU2D_B = new GPU2D_Soft(1);
+#else
+    GPU2D_A = new GPU2D_NeonSoft(0);
+    GPU2D_B = new GPU2D_NeonSoft(1);
+#endif
     if (!GPU3D::Init()) return false;
 
     FrontBuffer = 0;
@@ -192,12 +193,15 @@ void ResetVRAMCache()
     memset(VRAMFlat_BBG, 0, sizeof(VRAMFlat_BBG));
     memset(VRAMFlat_AOBJ, 0, sizeof(VRAMFlat_AOBJ));
     memset(VRAMFlat_BOBJ, 0, sizeof(VRAMFlat_BOBJ));
-    memset(VRAMFlat_ABGExtPal, 0, sizeof(VRAMFlat_ABGExtPal));
-    memset(VRAMFlat_BBGExtPal, 0, sizeof(VRAMFlat_BBGExtPal));
-    memset(VRAMFlat_AOBJExtPal, 0, sizeof(VRAMFlat_AOBJExtPal));
-    memset(VRAMFlat_BOBJExtPal, 0, sizeof(VRAMFlat_BOBJExtPal));
+    memset(VRAMFlat_ABGExtPal, 0, BGExtPalSize);
+    memset(VRAMFlat_BBGExtPal, 0, BGExtPalSize);
+    memset(VRAMFlat_AOBJExtPal, 0, OBJExtPalSize);
+    memset(VRAMFlat_BOBJExtPal, 0, OBJExtPalSize);
     memset(VRAMFlat_Texture, 0, sizeof(VRAMFlat_Texture));
     memset(VRAMFlat_TexPal, 0, sizeof(VRAMFlat_TexPal));
+
+    OAMDirty = 0x3;
+    PaletteDirty = 0xF;
 }
 
 void Reset()

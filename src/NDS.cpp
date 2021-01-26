@@ -960,30 +960,31 @@ u32 RunFrame()
             if (CPUStop & 0x80000000)
             {
                 // GXFIFO stall
-                s32 cycles = GPU3D::CyclesToRunFor();
-
-                ARM9Timestamp = std::min(ARM9Target, ARM9Timestamp+(cycles<<ARM9ClockShift));
-            }
-            else if (CPUStop & 0x0FFF)
-            {
-                DMAs[0]->Run<ConsoleType>();
-                if (!(CPUStop & 0x80000000)) DMAs[1]->Run<ConsoleType>();
-                if (!(CPUStop & 0x80000000)) DMAs[2]->Run<ConsoleType>();
-                if (!(CPUStop & 0x80000000)) DMAs[3]->Run<ConsoleType>();
-                if (ConsoleType == 1) DSi::RunNDMAs(0);
+                GPU3D::RunStall();
             }
             else
             {
-#ifdef JIT_ENABLED
-                if (EnableJIT)
-                    ARM9->ExecuteJIT();
+                if (CPUStop & 0x0FFF)
+                {
+                    DMAs[0]->Run<ConsoleType>();
+                    if (!(CPUStop & 0x80000000)) DMAs[1]->Run<ConsoleType>();
+                    if (!(CPUStop & 0x80000000)) DMAs[2]->Run<ConsoleType>();
+                    if (!(CPUStop & 0x80000000)) DMAs[3]->Run<ConsoleType>();
+                    if (ConsoleType == 1) DSi::RunNDMAs(0);
+                }
                 else
-#endif
-                    ARM9->Execute();
-            }
+                {
+        #ifdef JIT_ENABLED
+                    if (EnableJIT)
+                        ARM9->ExecuteJIT();
+                    else
+        #endif
+                        ARM9->Execute();
+                }
 
+                GPU3D::Run();
+            }
             RunTimers(0);
-            GPU3D::Run();
 
             target = ARM9Timestamp >> ARM9ClockShift;
             CurCPU = 1;

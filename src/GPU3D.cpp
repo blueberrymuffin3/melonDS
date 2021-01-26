@@ -150,7 +150,7 @@ typedef union
 FIFO<CmdFIFOEntry, 256> CmdFIFO;
 FIFO<CmdFIFOEntry, 4> CmdPIPE;
 
-FIFO<CmdFIFOEntry, 64> CmdStallQueue;
+FIFO<CmdFIFOEntry, 128> CmdStallQueue;
 
 u32 NumCommands, CurCommand, ParamCount, TotalParams;
 
@@ -252,6 +252,9 @@ u32 TexPalette;
 s32 PosTestResult[4];
 s16 VecTestResult[3];
 
+s32 PendingVertices[4][4];
+u32 NumPendingVertices = 0;
+
 Vertex TempVertexBuffer[4];
 u32 VertexNum;
 u32 VertexNumInPoly;
@@ -272,8 +275,40 @@ u32 RenderNumPolygons;
 
 u32 FlushRequest;
 u32 FlushAttributes;
+/*
+void FlushPendingVertices(u32 num)
+{
+    if (NumPendingVertices == num) return;
 
+    u32 i = NumPendingVertices - num;
+    asm volatile
+    (
+        "ld1 {v0.16b, v1.16b, v2.16b, v3.16b}\n"
 
+        "ld1 {v4.16b}, []\n"
+
+        "smull v5.2d, v0.2s, v0.4s[0]\n"
+        "smlal v5.2d, v1.2s, v0.4s[1]\n"
+        "smlal v5.2d, v2.4s, v0.4s[2]\n"
+        "smlal v5.2d, v3.4s, v0.4s[3]\n"
+
+        "shrn v5.2s, v5.2d, #12\n"
+
+        "smull2 v6.2d, v0.4s, v0.4s[0]\n"
+        "smlal2 v6.2d, v0.4s, v0.4s[1]\n"
+        "smlal2 v6.2d, v0.4s, v0.4s[2]\n"
+        "smlal2 v6.2d, v0.4s, v0.4s[3]\n"
+
+        "shrn2 v5.4s, v6.2d, #12\n"
+
+        "st1 {v5.4s}, [%[]]\n"
+
+        "sub %w[i], %w[i], #1\n"
+        "bnz %w[i]\n"
+    );
+
+    NumPendingVertices = num;
+}*/
 
 bool Init()
 {
@@ -656,6 +691,7 @@ void MatrixLoad4x3(s32* m, s32* s)
     m[12] = s[9]; m[13] = s[10]; m[14] = s[11]; m[15] = 0x1000;
 }
 
+#if NEONSOFTGPU_ENABLED
 void MatrixMult4x4(s32* m, s32* s)
 {
     s32 tmp[16];
@@ -757,6 +793,16 @@ void MatrixTranslate(s32* m, s32* s)
     m[14] += ((s64)s[0]*m[2] + (s64)s[1]*m[6] + (s64)s[2]*m[10]) >> 12;
     m[15] += ((s64)s[0]*m[3] + (s64)s[1]*m[7] + (s64)s[2]*m[11]) >> 12;
 }
+
+#else
+
+void MatrixMult4x4(s32* m, s32* s);
+void MatrixMult4x3(s32* m, s32* s);
+void MatrixMult3x3(s32* m, s32* s);
+void MatrixScale(s32* m, s32* s);
+void MatrixTranslate(s32* m, s32* s);
+
+#endif
 
 void UpdateClipMatrix()
 {
@@ -2441,6 +2487,30 @@ void FinishWork(s32 cycles)
     GXStat &= ~(1<<27);
 }
 
+void RunStall()
+{
+    CycleCount -= (NDS::ARM9Target >> NDS::ARM9ClockShift) - Timestamp;
+    s32 initialCycleCount = CycleCount;
+
+    if (CycleCount <= 0)
+    {
+        while (CycleCount <= 0 && !CmdStallQueue.IsEmpty())
+        {
+            if (NumPushPopCommands == 0) GXStat &= ~(1<<14);
+            if (NumTestCommands == 0)    GXStat &= ~(1<<0);
+
+            ExecuteCommand();
+        }
+
+        NDS::ARM9Timestamp += CycleCount - initialCycleCount;
+    }
+    else
+    {
+        NDS::ARM9Timestamp = NDS::ARM9Target;
+    }
+    Timestamp = NDS::ARM9Timestamp >> NDS::ARM9ClockShift;
+}
+
 void Run()
 {
     if (!GeometryEnabled || FlushRequest ||
@@ -2683,6 +2753,54 @@ void WriteToGXFIFO(u32 val)
             break;
     }
 }
+
+void WriteBatchToGXFIFO(u32* values, u32 count)
+{
+    int i = 0;
+    while (NumCommands > 0 && i < count)
+    {
+        WriteToGXFIFO(values[i++]);
+    }
+
+    for (; i < count; i++)
+    {
+        CurCommand = values[i];
+
+        NumCommands = 4;
+        do
+        {
+            TotalParams = (u32)CmdNumParams[CurCommand & 0xFF];
+            if (TotalParams)
+            {
+                for (ParamCount = 0; ParamCount < TotalParams; ParamCount++)
+                {
+                    i++;
+                    if (i == count)
+                        return;
+
+                    CmdFIFOEntry entry;
+                    entry.Command = CurCommand & 0xFF;
+                    entry.Param = values[i];
+                    CmdFIFOWrite(entry);
+                }
+            }
+            else
+            {
+                CmdFIFOEntry entry;
+                entry.Command = CurCommand & 0xFF;
+                // probably not necessary
+                entry.Param = values[i];
+                CmdFIFOWrite(entry);
+            }
+
+            CurCommand >>= 8;
+            NumCommands--;
+        } while (CurCommand != 0);
+
+        NumCommands = 0;
+    }
+}
+
 
 
 u8 Read8(u32 addr)

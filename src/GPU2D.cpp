@@ -655,18 +655,18 @@ void GPU2D::CheckWindows(u32 line)
     else if (line == Win1Coords[2]) Win1Active |=  0x1;
 }
 
-void GPU2D::CalculateWindowMask(u32 line)
+void GPU2D::CalculateWindowMask(u32 line, u8* windowMask, u8* objWindow)
 {
     for (u32 i = 0; i < 256; i++)
-        WindowMask[i] = WinCnt[2]; // window outside
+        windowMask[i] = WinCnt[2]; // window outside
 
     if (DispCnt & (1<<15))
     {
         // OBJ window
         for (int i = 0; i < 256; i++)
         {
-            if (OBJWindow[i])
-                WindowMask[i] = WinCnt[3];
+            if (objWindow[i])
+                windowMask[i] = WinCnt[3];
         }
     }
 
@@ -681,7 +681,7 @@ void GPU2D::CalculateWindowMask(u32 line)
             if (i == x2)      Win1Active &= ~0x2;
             else if (i == x1) Win1Active |=  0x2;
 
-            if (Win1Active == 0x3) WindowMask[i] = WinCnt[1];
+            if (Win1Active == 0x3) windowMask[i] = WinCnt[1];
         }
     }
 
@@ -696,7 +696,7 @@ void GPU2D::CalculateWindowMask(u32 line)
             if (i == x2)      Win0Active &= ~0x2;
             else if (i == x1) Win0Active |=  0x2;
 
-            if (Win0Active == 0x3) WindowMask[i] = WinCnt[0];
+            if (Win0Active == 0x3) windowMask[i] = WinCnt[0];
         }
     }
 }

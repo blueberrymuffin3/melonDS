@@ -81,6 +81,14 @@ if (ENABLE_OGLRENDERER)
     add_definitions(-DOGLRENDERER_ENABLED)
 endif()
 
+if (ARCHITECTURE STREQUAL ARM64)
+	option(ENABLE_NEONSOFTGPU "Enable NEON GPU" ON)
+
+	if (ENABLE_NEONSOFTGPU)
+    	add_definitions(-DNEONSOFTGPU_ENABLED)
+	endif()
+endif()
+
 if (CMAKE_BUILD_TYPE STREQUAL Debug)
 	add_compile_options(-Og)
 endif()

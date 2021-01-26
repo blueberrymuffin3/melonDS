@@ -256,21 +256,37 @@ void DMA::Run9()
             }*/
         }
 
-        while (IterCount > 0 && !Stall)
+        if (IsGXFIFODMA)
         {
-            NDS::ARM9Timestamp += (unitcycles << NDS::ARM9ClockShift);
+            u32 count = (NDS::ARM9Target - NDS::ARM9Timestamp) / (unitcycles << NDS::ARM9ClockShift);
+            count = std::min<u32>(count, 1);
+            count = std::max<u32>(count, IterCount);
 
-            if (ConsoleType == 1)
-                DSi::ARM9Write32(CurDstAddr, DSi::ARM9Read32(CurSrcAddr));
-            else
-                NDS::ARM9Write32(CurDstAddr, NDS::ARM9Read32(CurSrcAddr));
+            GPU3D::WriteBatchToGXFIFO((u32*)&NDS::MainRAM[CurSrcAddr & NDS::MainRAMMask], count);
 
-            CurSrcAddr += SrcAddrInc<<2;
-            CurDstAddr += DstAddrInc<<2;
-            IterCount--;
-            RemCount--;
+            NDS::ARM9Timestamp += (unitcycles << NDS::ARM9ClockShift) * count;
+            IterCount -= count;
+            RemCount -= count;
+            CurSrcAddr += (count * SrcAddrInc) << 2;
+        }
+        else
+        {
+            while (IterCount > 0 && !Stall)
+            {
+                NDS::ARM9Timestamp += (unitcycles << NDS::ARM9ClockShift);
 
-            if (NDS::ARM9Timestamp >= NDS::ARM9Target) break;
+                if (ConsoleType == 1)
+                    DSi::ARM9Write32(CurDstAddr, DSi::ARM9Read32(CurSrcAddr));
+                else
+                    NDS::ARM9Write32(CurDstAddr, NDS::ARM9Read32(CurSrcAddr));
+
+                CurSrcAddr += SrcAddrInc<<2;
+                CurDstAddr += DstAddrInc<<2;
+                IterCount--;
+                RemCount--;
+
+                if (NDS::ARM9Timestamp >= NDS::ARM9Target) break;
+            }
         }
     }
 

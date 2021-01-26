@@ -33,7 +33,17 @@ extern u16 DispStat[2];
 extern u8 VRAMCNT[9];
 extern u8 VRAMSTAT;
 
-extern u8 Palette[2*1024];
+const u32 BGExtPalSize = 32*1024;
+const u32 OBJExtPalSize = 8*1024;
+
+extern u8 AllPaletteMemory[2*1024+BGExtPalSize*2+OBJExtPalSize*2];
+
+u8* const Palette = AllPaletteMemory;
+u8* const VRAMFlat_ABGExtPal = AllPaletteMemory + 2*1024;
+u8* const VRAMFlat_BBGExtPal = VRAMFlat_ABGExtPal + BGExtPalSize;
+u8* const VRAMFlat_AOBJExtPal = VRAMFlat_BBGExtPal + BGExtPalSize;
+u8* const VRAMFlat_BOBJExtPal = VRAMFlat_AOBJExtPal + OBJExtPalSize;
+
 extern u8 OAM[2*1024];
 
 extern u8 VRAM_A[128*1024];
@@ -119,12 +129,6 @@ extern u8 VRAMFlat_ABG[512*1024];
 extern u8 VRAMFlat_BBG[128*1024];
 extern u8 VRAMFlat_AOBJ[256*1024];
 extern u8 VRAMFlat_BOBJ[128*1024];
-
-extern u8 VRAMFlat_ABGExtPal[32*1024];
-extern u8 VRAMFlat_BBGExtPal[32*1024];
-
-extern u8 VRAMFlat_AOBJExtPal[8*1024];
-extern u8 VRAMFlat_BOBJExtPal[8*1024];
 
 extern u8 VRAMFlat_Texture[512*1024];
 extern u8 VRAMFlat_TexPal[128*1024];
