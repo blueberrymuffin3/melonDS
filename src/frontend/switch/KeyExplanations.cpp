@@ -36,16 +36,15 @@ void DoGui(BoxGui::Frame& parent)
     if (KeysExplained == 0)
         return;
 
-    const float tabSize = 140.f;
+    const Gfx::Vector2f Padding = {15.f, 10.f};
 
-    Gfx::Vector2f size = {__builtin_popcount(KeysExplained) * tabSize, TextLineHeight * 2.f};
-    BoxGui::Frame explanationFrame{parent, BoxGui::Rect{parent.Area.Size - size, size}};
-    Gfx::DrawRectangle(explanationFrame.Area.Position, explanationFrame.Area.Size, DarkColor);
     u32 i = 0;
     u32 keysExplained = KeysExplained;
+    BoxGui::Skewer skewer{parent, parent.Area.Size.Y - TextLineHeight / 2.f - Padding.Y, BoxGui::direction_Horizontal};
+    skewer.AlignRight(0.f);
     while (keysExplained)
     {
-        int button = __builtin_ctz(keysExplained);
+        int button = 31 - __builtin_clz(keysExplained);
         keysExplained &= ~(1 << button);
 
         const char* buttonIcon = "\uE009";
@@ -59,11 +58,14 @@ void DoGui(BoxGui::Frame& parent)
         case button_Minus: buttonIcon = GFX_NINTENDOFONT_MINUS_BUTTON; break;
         default: break;
         }
-        Gfx::DrawText(Gfx::SystemFontNintendoExt, explanationFrame.Area.Position + Gfx::Vector2f{tabSize * i + 10.f, size.Y/2.f-TextLineHeight/2.f},
-            TextLineHeight, WidgetColorBright, Gfx::align_Left, Gfx::align_Left, buttonIcon);
 
-        Gfx::DrawText(Gfx::SystemFontStandard, explanationFrame.Area.Position + Gfx::Vector2f{tabSize * i + 10.f + 30.f, size.Y/2.f-TextLineHeight/2.f},
-            TextLineHeight, WidgetColorBright, Gfx::align_Left, Gfx::align_Left, KeyExplanations[button].c_str());
+        const char* explanation = KeyExplanations[button].c_str();
+        Gfx::Vector2f textSize = Gfx::MeasureText(Gfx::SystemFontStandard, TextLineHeight, explanation) + Gfx::Vector2f{28.f, 0.f};
+        BoxGui::Frame frame{parent, skewer.Spit(textSize + Padding * 2.f), Padding, Padding};
+
+        Gfx::DrawRectangle(frame.UnpaddedArea().Position, frame.UnpaddedArea().Size, DarkColor, true);
+        Gfx::DrawText(Gfx::SystemFontNintendoExt, frame.Area.Position, TextLineHeight, WidgetColorBright, Gfx::align_Left, Gfx::align_Left, buttonIcon);
+        Gfx::DrawText(Gfx::SystemFontStandard, frame.Area.Position + Gfx::Vector2f{28.f, 0.f}, TextLineHeight, WidgetColorBright, Gfx::align_Left, Gfx::align_Left, explanation);
 
         i++;
     }

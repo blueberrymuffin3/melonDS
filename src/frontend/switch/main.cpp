@@ -13,6 +13,7 @@
 #include "SPU.h"
 #include "FrontendUtil.h"
 #include "Config.h"
+#include "Platform.h"
 
 #include "PlatformConfig.h"
 
@@ -24,6 +25,8 @@
 #include "StartMenu.h"
 #include "KeyExplanations.h"
 #include "SettingsDialog.h"
+#include "ROMMetaDatabase.h"
+#include "ErrorDialog.h"
 
 #include "mm_vec/mm_vec.h"
 
@@ -32,17 +35,43 @@
 bool Done = false;
 int CurrentUiScreen = uiScreen_Start;
 
+PadState Pad;
+
+namespace Profiler
+{
+
+double Sum;
+
+void Clear()
+{
+    Sum = 0.0;
+}
+
+u64 SectionStartTimestamp;
+
+void StartSection()
+{
+    SectionStartTimestamp = armGetSystemTick();
+}
+
+void EndSection()
+{
+    Sum += armTicksToNs(armGetSystemTick() - SectionStartTimestamp) * 0.000001;
+}
+
+}
+
 namespace Emulation
 {
 
-u32 KeyMask;
+bool FeedMicNoise;
+
+u32 KeyMask = 0xFFFFFFFF;
 u64 PlatformKeysHeld;
 
 u32 FramebufferTextures[2];
-// we double buffer a doubled buffered variable, yes
-int FrontBuffer = 0;
 bool NewFrameReady = false;
-u32 Framebuffers[2][2][256*192];
+u32 CurrentFrontBuffer;
 
 int FrametimeHistogramNextValue;
 float FrametimeHistogram[120];
@@ -54,7 +83,7 @@ CondVar FrameStartCond;
 Thread EmuThread, AudioThread;
 
 int State;
-std::atomic<int> StateInternal;
+std::atomic<int> StateEmuThread;
 std::atomic<int> StateAtomic;
 
 const int AudioFrameSize = 768 * 2 * sizeof(s16);
@@ -62,8 +91,6 @@ AudioDriver AudioDrv;
 void* AudMemPool = NULL;
 
 bool LimitFramerate;
-
-bool MissedFrame;
 
 bool LidClosed;
 
@@ -73,26 +100,26 @@ Gfx::Vector2f TouchCursorPosition;
 
 bool TouchDown;
 int TouchFinalPositionX, TouchFinalPositionY;
+float TouchScale;
 
-u32 JoyconSixaxisHandles[2];
-u32 ConsoleSixAxisHandle;
+int MainScreenPosition[3];
+int AutoScreenSizing, LastAutoScreenSizing;
+
+HidSixAxisSensorHandle JoyconSixaxisHandles[2];
+HidSixAxisSensorHandle ConsoleSixAxisHandle;
+HidSixAxisSensorHandle FullKeySixAxisHandle;
 
 float GyroCalibrationUp[3];
 float GyroCalibrationRight[3];
 float GyroCalibrationForward[3];
 
-void RecalibrateGyro(SixAxisSensorValues& values)
-{
-    GyroCalibrationRight[0] = values.orientation[0].x;
-    GyroCalibrationRight[1] = values.orientation[0].y;
-    GyroCalibrationRight[2] = values.orientation[0].z;
-    GyroCalibrationForward[0] = values.orientation[1].x;
-    GyroCalibrationForward[1] = values.orientation[1].y;
-    GyroCalibrationForward[2] = values.orientation[1].z;
-    GyroCalibrationUp[0] = values.orientation[2].x;
-    GyroCalibrationUp[1] = values.orientation[2].y;
-    GyroCalibrationUp[2] = values.orientation[2].z;
+bool UseRealTouchscreen;
 
+void RecalibrateGyro(HidSixAxisSensorState& values)
+{
+    xv3_cpy(GyroCalibrationRight, values.direction.direction[0]);
+    xv3_cpy(GyroCalibrationForward, values.direction.direction[1]);
+    xv3_cpy(GyroCalibrationUp, values.direction.direction[2]);
     xv_norm(GyroCalibrationUp, GyroCalibrationUp, 3);
     xv_norm(GyroCalibrationRight, GyroCalibrationRight, 3);
     xv_norm(GyroCalibrationForward, GyroCalibrationForward, 3);
@@ -100,7 +127,7 @@ void RecalibrateGyro(SixAxisSensorValues& values)
 
 void AudioOutput(void *args)
 {
-    int internalState = StateAtomic;
+    int state = StateAtomic;
 
     AudioDriverWaveBuf buffers[2];
     memset(&buffers[0], 0, sizeof(AudioDriverWaveBuf) * 2);
@@ -112,14 +139,14 @@ void AudioOutput(void *args)
         buffers[i].end_sample_offset = buffers[i].start_sample_offset + AudioFrameSize / 2 / sizeof(s16);
     }
 
-    while (internalState != emuState_Quit)
+    while (state != emuState_Quit)
     {
-        while (internalState != emuState_Running && internalState != emuState_Quit)
+        while (state != emuState_Running && state != emuState_Quit)
         {
             svcSleepThread(17000000); // a bit more than a frame...
-            internalState = StateAtomic;
+            state = StateAtomic;
         }
-        while (internalState == emuState_Running)
+        while (state == emuState_Running)
         {
             AudioDriverWaveBuf* refillBuf = NULL;
             for (int i = 0; i < 2; i++)
@@ -136,27 +163,30 @@ void AudioOutput(void *args)
                 s16* data = (s16*)AudMemPool + refillBuf->start_sample_offset * 2;
 
                 int nSamples = 0;
-                while (internalState == emuState_Running && !(nSamples = SPU::ReadOutput(data, 768)))
+                while (state == emuState_Running && !(nSamples = SPU::ReadOutput(data, 768)))
                 {
                     svcSleepThread(10000);
-                    internalState = StateAtomic;
+                    state = StateAtomic;
                 }
 
-                u32 last = ((u32*)data)[nSamples - 1];
-                while (nSamples < 768)
-                    ((u32*)data)[nSamples++] = last;
+                if (nSamples > 0)
+                {
+                    u32 last = ((u32*)data)[nSamples - 1];
+                    while (nSamples < 768)
+                        ((u32*)data)[nSamples++] = last;
 
-                armDCacheFlush(data, nSamples * 2 * sizeof(u16));
-                refillBuf->end_sample_offset = refillBuf->start_sample_offset + nSamples;
+                    armDCacheFlush(data, nSamples * 2 * sizeof(u16));
+                    refillBuf->end_sample_offset = refillBuf->start_sample_offset + nSamples;
 
-                audrvVoiceAddWaveBuf(&AudioDrv, 0, refillBuf);
-                audrvVoiceStart(&AudioDrv, 0);
+                    audrvVoiceAddWaveBuf(&AudioDrv, 0, refillBuf);
+                    audrvVoiceStart(&AudioDrv, 0);
+                }
             }
 
             audrvUpdate(&AudioDrv);
             audrenWaitFrame();
 
-            internalState = StateAtomic;
+            state = StateAtomic;
         }
     }
 }
@@ -171,22 +201,28 @@ void EmuThreadFunc(void*)
 
     bool missedFrame = false;
 
-    while (StateAtomic != emuState_Quit)
+    u32 state = StateAtomic;
+    while (state != emuState_Quit)
     {
-        StateInternal = StateAtomic.load(std::memory_order_acquire);
+        StateEmuThread = state;
 
-        if (StateInternal.load(std::memory_order_relaxed) == emuState_Running)
+        if (state == emuState_Running)
         {
             mutexLock(&EmuThreadLock);
             if (!missedFrame && LimitFramerate)
             {
                 condvarWait(&FrameStartCond, &EmuThreadLock);
-                if (StateAtomic != emuState_Running)
+                state = StateAtomic;
+                if (state != emuState_Running)
                 {
                     mutexUnlock(&EmuThreadLock);
                     continue;
                 }
             }
+            if (FeedMicNoise)
+                Frontend::Mic_FeedNoise();
+            else
+                Frontend::Mic_FeedSilence();
             NDS::SetKeyMask(KeyMask);
             if (TouchDown)
                 NDS::TouchScreen((u16)TouchFinalPositionX, (u16)TouchFinalPositionY);
@@ -201,24 +237,43 @@ void EmuThreadFunc(void*)
             NDS::RunFrame();
 
             u64 frameLength = armTicksToNs(armGetSystemTick() - frameStart);
+            if (frameLength < 1000)
+            {
+                svcSleepThread(1000 * 1000);
+                frameLength = 1000 * 1000;
+            }
             missedFrame = frameLength > 16 * 1000 * 1000;
 
             mutexLock(&EmuThreadLock);
-            MissedFrame = missedFrame;
-
             FrametimeHistogram[FrametimeHistogramNextValue] = (float)frameLength * 0.000001f;
             FrametimeHistogramNextValue++;
             if (FrametimeHistogramNextValue >= 120)
                 FrametimeHistogramNextValue = 0;
 
-            if (GPU::Framebuffer[GPU::FrontBuffer][0] && GPU::Framebuffer[GPU::FrontBuffer][1])
             {
-                memcpy(Framebuffers[FrontBuffer ^ 1][0], GPU::Framebuffer[GPU::FrontBuffer][0], 256*192*4);
-                memcpy(Framebuffers[FrontBuffer ^ 1][1], GPU::Framebuffer[GPU::FrontBuffer][1], 256*192*4);
+                MainScreenPosition[2] = MainScreenPosition[1];
+                MainScreenPosition[1] = MainScreenPosition[0];
+                MainScreenPosition[0] = NDS::PowerControl9 >> 15;
+                int guess;
+                if (MainScreenPosition[0] == MainScreenPosition[2] &&
+                    MainScreenPosition[0] != MainScreenPosition[1])
+                {
+                    // constant flickering, likely displaying 3D on both screens
+                    // TODO: when both screens are used for 2D only...???
+                    guess = 0;
+                }
+                else
+                {
+                    if (MainScreenPosition[0] == 1)
+                        guess = 1;
+                    else
+                        guess = 2;
+                }
+                AutoScreenSizing = guess;
             }
 
+            CurrentFrontBuffer = GPU::FrontBuffer;
             NewFrameReady = true;
-
             mutexUnlock(&EmuThreadLock);
         }
         else
@@ -226,6 +281,8 @@ void EmuThreadFunc(void*)
             svcSleepThread(1000 * 1000);
             missedFrame = false;
         }
+
+        state = StateAtomic;
     }
 
     GPU::DeInitRenderer();
@@ -240,8 +297,13 @@ void Init()
     threadCreate(&EmuThread, EmuThreadFunc, NULL, NULL, 1024*1024*8, 0x20, 1);
     threadStart(&EmuThread);
 
+    u32 zeroData[256*192] = {0};
     for (u32 i = 0; i < 2; i++)
+    {
         FramebufferTextures[i] = Gfx::TextureCreate(256, 192, DkImageFormat_BGRX8_Unorm);
+
+        Gfx::TextureUpload(FramebufferTextures[i], 0, 0, 256, 192, zeroData, 256*4);
+    }
 
     UpdateScreenLayout();
 
@@ -293,15 +355,13 @@ void Init()
     threadCreate(&AudioThread, AudioOutput, nullptr, nullptr, 1024*32, 0x20, 0);
     threadStart(&AudioThread);
 
-    hidGetSixAxisSensorHandles(JoyconSixaxisHandles, 2, CONTROLLER_PLAYER_1, TYPE_JOYCON_PAIR);
+    hidGetSixAxisSensorHandles(JoyconSixaxisHandles, 2, HidNpadIdType_No1, HidNpadStyleTag_NpadJoyDual);
+    hidGetSixAxisSensorHandles(&ConsoleSixAxisHandle, 1, HidNpadIdType_Handheld, HidNpadStyleTag_NpadHandheld);
+    hidGetSixAxisSensorHandles(&FullKeySixAxisHandle, 1, HidNpadIdType_No1, HidNpadStyleTag_NpadFullKey);
     hidStartSixAxisSensor(JoyconSixaxisHandles[0]);
     hidStartSixAxisSensor(JoyconSixaxisHandles[1]);
-    hidGetSixAxisSensorHandles(&ConsoleSixAxisHandle, 1, CONTROLLER_HANDHELD, TYPE_HANDHELD);
     hidStartSixAxisSensor(ConsoleSixAxisHandle);
-
-    SixAxisSensorValues sixaxisValues;
-    hidSixAxisSensorValuesRead(&sixaxisValues, CONTROLLER_P1_AUTO, 1);
-    RecalibrateGyro(sixaxisValues);
+    hidStartSixAxisSensor(FullKeySixAxisHandle);
 }
 
 void DeInit()
@@ -309,6 +369,7 @@ void DeInit()
     hidStopSixAxisSensor(JoyconSixaxisHandles[0]);
     hidStopSixAxisSensor(JoyconSixaxisHandles[1]);
     hidStopSixAxisSensor(ConsoleSixAxisHandle);
+    hidStopSixAxisSensor(FullKeySixAxisHandle);
 
     State = emuState_Quit;
     StateAtomic = State;
@@ -330,37 +391,40 @@ void DeInit()
 
 const u32 KeyMappings[] =
 {
-    KEY_A,
-    KEY_B,
-    KEY_MINUS,
-    KEY_PLUS,
-    KEY_DRIGHT | KEY_LSTICK_RIGHT,
-    KEY_DLEFT  | KEY_LSTICK_LEFT,
-    KEY_DUP    | KEY_LSTICK_UP,
-    KEY_DDOWN  | KEY_LSTICK_DOWN,
-    KEY_R,
-    KEY_L,
-    KEY_X,
-    KEY_Y
+    HidNpadButton_A,
+    HidNpadButton_B,
+    HidNpadButton_Minus,
+    HidNpadButton_Plus,
+    HidNpadButton_Right | HidNpadButton_StickLRight,
+    HidNpadButton_Left | HidNpadButton_StickLLeft,
+    HidNpadButton_Up | HidNpadButton_StickLUp,
+    HidNpadButton_Down | HidNpadButton_StickLDown,
+    HidNpadButton_R,
+    HidNpadButton_L,
+    HidNpadButton_X,
+    HidNpadButton_Y,
 };
 
 void UpdateAndDraw(u64& keysDown, u64& keysUp)
 {
-    bool touchUseCursor = false;
+    bool touchUseCursor = !UseRealTouchscreen;
 
     if (State == emuState_Running)
     {
         // delay until the end of the frame
         svcSleepThread(1000 * 1000 * 10);
 
-        hidScanInput();
-        keysDown = hidKeysDown(CONTROLLER_P1_AUTO);
-        keysUp = hidKeysUp(CONTROLLER_P1_AUTO);
+        padUpdate(&Pad);
+        keysDown = padGetButtonsDown(&Pad);
+        keysUp = padGetButtonsUp(&Pad);
 
         PlatformKeysHeld |= keysDown;
         PlatformKeysHeld &= ~keysUp;
 
-        if ((PlatformKeysHeld & (KEY_ZL|KEY_ZR)) == (KEY_ZL|KEY_ZR))
+        if (PlatformKeysHeld & (HidNpadButton_StickL))
+            asm volatile ("brk #0\n");
+
+        if ((PlatformKeysHeld & (HidNpadButton_ZL|HidNpadButton_ZR)) == (HidNpadButton_ZL|HidNpadButton_ZR))
         {
             SetPause(true);
         }
@@ -411,25 +475,26 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
             Gfx::Vector2f botScreenCenter = ScreenPoints[1][0] + botScreenSize * 0.5f;
             if (Config::TouchscreenMode < 2)
             {
-                JoystickPosition rstick;
-                hidJoystickRead(&rstick, CONTROLLER_P1_AUTO, JOYSTICK_RIGHT);
+                HidAnalogStickState rstick = padGetStickPos(&Pad, 1);
 
-                Gfx::Vector2f rstickVec = {(float)rstick.dx / JOYSTICK_MAX, -(float)rstick.dy / JOYSTICK_MAX};
+                Gfx::Vector2f rstickVec = {(float)rstick.x / JOYSTICK_MAX, -(float)rstick.y / JOYSTICK_MAX};
 
                 touchUseCursor = true;
                 if (Config::TouchscreenMode == 0) // mouse mode
                 {
                     if (rstickVec.LengthSqr() < 0.1f * 0.1f)
                         TouchCursorVelocity = {0.f, 0.f};
-                    
+                    else
+                        UseRealTouchscreen = false;
+
                     float maxSpeed = std::max(botScreenSize.X, botScreenSize.Y) * 1.5f;
                     TouchCursorVelocity += rstickVec * std::max(botScreenSize.X, botScreenSize.Y) * 0.125f;
                     TouchCursorVelocity = TouchCursorVelocity.Clamp({-maxSpeed, -maxSpeed}, {maxSpeed, maxSpeed});
 
                     // allow for quick turns
-                    if ((TouchCursorVelocity.X > 0.f && rstick.dx < 0) || (TouchCursorVelocity.X < 0.f && rstick.dx > 0))
+                    if ((TouchCursorVelocity.X > 0.f && rstick.x < 0) || (TouchCursorVelocity.X < 0.f && rstick.x > 0))
                         TouchCursorVelocity.X = 0.f;
-                    if ((TouchCursorVelocity.Y > 0.f && rstick.dy > 0) || (TouchCursorVelocity.Y < 0.f && rstick.dy < 0))
+                    if ((TouchCursorVelocity.Y > 0.f && rstick.y > 0) || (TouchCursorVelocity.Y < 0.f && rstick.y < 0))
                         TouchCursorVelocity.Y = 0.f;
                     TouchCursorPosition += TouchCursorVelocity * Gfx::AnimationTimestep;
                 }
@@ -445,6 +510,8 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
                     }
                     else
                     {
+                        UseRealTouchscreen = false;
+
                         // we project the ray from the center of the bottom screen with the direction of the analog stick
                         // onto the border of the bottom screen so we can calculate the distance
                         float topX = origin.X + direction.X * ((ScreenPoints[1][0].Y - origin.Y) / direction.Y);
@@ -469,22 +536,54 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
             else
             {
                 touchUseCursor = true;
+                UseRealTouchscreen = false;
 
-                SixAxisSensorValues sixaxisValues;
-                hidSixAxisSensorValuesRead(&sixaxisValues, CONTROLLER_P1_AUTO, 1);
+                HidSixAxisSensorState sixaxisValues;
+                u32 styleSet = padGetStyleSet(&Pad);
 
                 float xAngle, yAngle;
-                if (hidGetHandheldMode())
+                if (styleSet & HidNpadStyleTag_NpadHandheld)
                 {
-                    float up[] = {sixaxisValues.orientation[2].x, sixaxisValues.orientation[2].y, sixaxisValues.orientation[2].z};
+                    hidGetSixAxisSensorStates(ConsoleSixAxisHandle, &sixaxisValues, 1);
+                    float up[3];
+                    xv3_cpy(up, sixaxisValues.direction.direction[2]);
                     xv_norm(up, up, 3);
 
-                    xAngle = xv3_dot(up, GyroCalibrationRight);
-                    yAngle = xv3_dot(up, GyroCalibrationForward);
+                    switch (Config::GlobalRotation)
+                    {
+                    case 0:
+                        xAngle = xv3_dot(up, GyroCalibrationRight);
+                        yAngle = xv3_dot(up, GyroCalibrationForward);
+                        break;
+                    case 1:
+                        xAngle = -(xv3_dot(up, GyroCalibrationForward));
+                        yAngle = xv3_dot(up, GyroCalibrationRight);
+                        break;
+                    case 2:
+                        xAngle = -(xv3_dot(up, GyroCalibrationRight));
+                        yAngle = -(xv3_dot(up, GyroCalibrationForward));
+                        break;
+                    case 3:
+                        xAngle = xv3_dot(up, GyroCalibrationForward);
+                        yAngle = -(xv3_dot(up, GyroCalibrationRight));
+                        break;
+                    }
                 }
                 else
                 {
-                    float forward[] = {sixaxisValues.orientation[1].x, sixaxisValues.orientation[1].y, sixaxisValues.orientation[1].z};
+                    HidSixAxisSensorHandle handle;
+                    int preferedPad = Config::LeftHandedMode ? 0 : 1;
+                    u32 preferedPadMask = Config::LeftHandedMode ? HidNpadAttribute_IsLeftConnected : HidNpadAttribute_IsRightConnected;
+                    if (styleSet & HidNpadStyleTag_NpadFullKey)
+                        handle = FullKeySixAxisHandle;
+                    else if (padGetAttributes(&Pad) & preferedPadMask)
+                        handle = JoyconSixaxisHandles[preferedPad];
+                    else
+                        handle = JoyconSixaxisHandles[preferedPad ^ 1];
+                    hidGetSixAxisSensorStates(handle, &sixaxisValues, 1);
+
+                    float forward[3];
+                    xv3_cpy(forward, sixaxisValues.direction.direction[1]);
                     xv_norm(forward, forward, 3);
 
                     xAngle = xv3_dot(forward, GyroCalibrationRight);
@@ -494,16 +593,16 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
                 TouchCursorPosition = botScreenCenter
                     + Gfx::Vector2f{xAngle / (float)M_PI * 10.f, -yAngle / (float)M_PI * 10.f} * std::max(botScreenSize.X, botScreenSize.Y);
 
-                if (keysDown & KEY_ZL)
+                if (keysDown & (!Config::LeftHandedMode
+                    ? HidNpadButton_ZL : HidNpadButton_ZR))
                     RecalibrateGyro(sixaxisValues);
             }
 
-            touchPosition touchPosition;
-            if (hidTouchCount() > 0)
+            HidTouchScreenState touchPosition;
+            if (hidGetTouchScreenStates(&touchPosition, 1) && touchPosition.count > 0)
             {
-                hidTouchRead(&touchPosition, 0);
-
-                TouchCursorPosition = {-1.f, -1.f};
+                touchUseCursor = false;
+                UseRealTouchscreen = true;
             }
 
             if (TouchCursorPosition.X < ScreenPoints[1][0].X)
@@ -532,15 +631,42 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
                 keyMask &= ~(!!(PlatformKeysHeld & rotatedKeyMappings[i]) << i);
 
             mutexLock(&EmuThreadLock);
-            if (touchUseCursor)
+            FeedMicNoise = PlatformKeysHeld & HidNpadButton_StickL;
+            if (keysDown & HidNpadButton_StickR)
             {
+                switch (Config::ScreenSizing)
+                {
+                case 0:
+                    Config::ScreenSizing = AutoScreenSizing == 0 ? 1 : AutoScreenSizing;
+                    break;
+                case 1:
+                    Config::ScreenSizing = 2;
+                    break;
+                case 2:
+                    Config::ScreenSizing = 1;
+                    break;
+                case 3:
+                    Config::ScreenSizing = AutoScreenSizing == 2 ? 1 : 2;
+                    break;
+                }
+                UpdateScreenLayout();
+            }
+            if (AutoScreenSizing != LastAutoScreenSizing)
+            {
+                UpdateScreenLayout();
+                AutoScreenSizing = LastAutoScreenSizing;
+            }
+
+            if (!UseRealTouchscreen)
+            {
+                u32 touchButtonMask = !Config::LeftHandedMode ? HidNpadButton_ZR : HidNpadButton_ZL;
                 if (Config::TouchscreenClickMode == 0)
-                    TouchHeld = PlatformKeysHeld & KEY_ZR;
-                else if (keysDown & KEY_ZR)
+                    TouchHeld = PlatformKeysHeld & touchButtonMask;
+                else if (keysDown & touchButtonMask)
                     TouchHeld ^= true;
 
-                TouchFinalPositionX = (int)TouchCursorPosition.X;
-                TouchFinalPositionY = (int)TouchCursorPosition.Y;
+                TouchFinalPositionX = (int)(TouchCursorPosition.X * TouchScale);
+                TouchFinalPositionY = (int)(TouchCursorPosition.Y * TouchScale);
                 Frontend::GetTouchCoords(TouchFinalPositionX, TouchFinalPositionY);
                 TouchDown = TouchHeld
                     && TouchFinalPositionX >= 0 && TouchFinalPositionX < 256
@@ -548,12 +674,13 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
             }
             else
             {
-                TouchDown = true;
-                Gfx::Rotate90Deg(touchPosition.px, touchPosition.py, touchPosition.px, touchPosition.py, Config::GlobalRotation);
-                TouchFinalPositionX = touchPosition.px;
-                TouchFinalPositionY = touchPosition.py;
+                Gfx::Rotate90Deg(touchPosition.touches[0].x, touchPosition.touches[0].y, touchPosition.touches[0].x, touchPosition.touches[0].y, Config::GlobalRotation);
+                TouchFinalPositionX = (int)(touchPosition.touches[0].x * TouchScale);
+                TouchFinalPositionY = (int)(touchPosition.touches[0].y * TouchScale);
                 Frontend::GetTouchCoords(TouchFinalPositionX, TouchFinalPositionY);
-                TouchDown = TouchFinalPositionX >= 0 && TouchFinalPositionX < 256
+                TouchDown =
+                    touchPosition.count > 0
+                    && TouchFinalPositionX >= 0 && TouchFinalPositionX < 256
                     && TouchFinalPositionY >= 0 && TouchFinalPositionY < 192;
             }
 
@@ -564,9 +691,8 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
             if (NewFrameReady)
             {
                 NewFrameReady = false;
-                FrontBuffer ^= 1;
                 for (u32 i = 0; i < 2; i++)
-                    Gfx::TextureUpload(FramebufferTextures[i], 0, 0, 256, 192, GPU::Framebuffer[GPU::FrontBuffer][i], 256*4);
+                    Gfx::TextureUpload(FramebufferTextures[i], 0, 0, 256, 192, GPU::Framebuffer[CurrentFrontBuffer][i], 256*4);
             }
             mutexUnlock(&EmuThreadLock);
             // request a new frame
@@ -610,12 +736,13 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
     {
         // locking the mutex again, eh not so great
         mutexLock(&EmuThreadLock);
-        Gfx::DrawRectangle({0.f, 0.f}, {3*120.f, TextLineHeight * 2.f}, DarkColorTransparent);
-        float sum = 0.f, max = 0.f;    
+        Gfx::DrawRectangle({0.f, 0.f}, {4*120.f, TextLineHeight * 4.f}, DarkColorTransparent);
+        float sum = 0.f, max = 0.f, min = infinityf();
         for (int i = 0; i < 120; i++)
         {
             sum += FrametimeHistogram[i];
             max = std::max(max, FrametimeHistogram[i]);
+            min = std::min(min, FrametimeHistogram[i]);
         }
 
         int idx = FrametimeHistogramNextValue;
@@ -629,9 +756,11 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
         }
 
         float averageFrametime = sum / 120.f;
-        Gfx::DrawText(Gfx::SystemFontStandard, {0.f, 0.f}, TextLineHeight, WidgetColorBright, "avg: %.2fms max: %.2fms %d", averageFrametime, max, MissedFrame);
+        Gfx::DrawText(Gfx::SystemFontStandard, {0.f, 0.f}, TextLineHeight, WidgetColorBright, "avg: %.2fms min %.2fms max: %.2fms\n\nprof: %.2fms", averageFrametime, min, max, Profiler::Sum);
         mutexUnlock(&EmuThreadLock);
     }
+
+    Profiler::Clear();
 
     if (State == emuState_Paused)
     {
@@ -640,16 +769,85 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
     }
 }
 
+std::string GetLoadErrorStr(int error)
+{
+    switch (error)
+    {
+    case Frontend::Load_BIOS9Missing:
+        return "DS ARM9 BIOS was not found or could not be accessed.\nIt should be named bios9.bin and be put into /switch/melonds";
+    case Frontend::Load_BIOS9Bad:
+        return "DS ARM9 BIOS is not a valid BIOS dump.";
+
+    case Frontend::Load_BIOS7Missing:
+        return "DS ARM7 BIOS was not found or could not be accessed.\nIt should be named bios7.bin and be put into /switch/melonds";
+    case Frontend::Load_BIOS7Bad:
+        return "DS ARM7 BIOS is not a valid BIOS dump.";
+
+    case Frontend::Load_FirmwareMissing:
+        return "DS firmware was not found or could not be accessed.\nIt should be named firmware.bin and be put into /switch/melonds";
+    case Frontend::Load_FirmwareBad:
+        return "DS firmware is not a valid firmware dump.";
+    case Frontend::Load_FirmwareNotBootable:
+        return "DS firmware is not bootable.";
+
+    case Frontend::Load_DSiBIOS9Missing:
+        return "DSi ARM9 BIOS was not found or could not be accessed.\nIt should be named biosdsi9.rom and be put into /switch/melonds";
+    case Frontend::Load_DSiBIOS9Bad:
+        return "DSi ARM9 BIOS is not a valid BIOS dump.";
+
+    case Frontend::Load_DSiBIOS7Missing:
+        return "DSi ARM7 BIOS was not found or could not be accessed.\nIt should be named biosdsi7.rom and be put into /switch/melonds";
+    case Frontend::Load_DSiBIOS7Bad:
+        return "DSi ARM7 BIOS is not a valid BIOS dump.";
+
+    case Frontend::Load_DSiNANDMissing:
+        return "DSi NAND was not found or could not be accessed.\nIt should be named nand.bin and be put into /switch/melonds";
+    case Frontend::Load_DSiNANDBad:
+        return "DSi NAND is not a valid NAND dump.";
+
+    case Frontend::Load_ROMLoadError:
+        return "Failed to load the ROM.";
+
+    default: return "Unknown error during launch; smack Generic/RSDuck/catlover007.";
+    }
+}
+
 void LoadROM(const char* file)
 {
     assert(State == emuState_Nothing);
     mutexLock(&EmuThreadLock);
     int res = Frontend::LoadROM(file, 0);
-    printf("loading %s %d\n", file, res);
-    State = emuState_Running;
-    StateAtomic = State;
-    CurrentUiScreen = uiScreen_Start;
-    mutexUnlock(&EmuThreadLock);
+    if (res != Frontend::Load_OK)
+    {
+        ErrorDialog::Open(GetLoadErrorStr(res));
+        mutexUnlock(&EmuThreadLock);
+    }
+    else
+    {
+        State = emuState_Running;
+        StateAtomic = State;
+        CurrentUiScreen = uiScreen_Start;
+        mutexUnlock(&EmuThreadLock);
+    }
+}
+
+void LoadBIOS()
+{
+    assert(State == emuState_Nothing);
+    mutexLock(&EmuThreadLock);
+    int res = Frontend::LoadBIOS();
+    if (res != Frontend::Load_OK)
+    {
+        ErrorDialog::Open(GetLoadErrorStr(res));
+        mutexUnlock(&EmuThreadLock);
+    }
+    else
+    {
+        State = emuState_Running;
+        StateAtomic = State;
+        CurrentUiScreen = uiScreen_Start;
+        mutexUnlock(&EmuThreadLock);        
+    }
 }
 
 void SetPause(bool pause)
@@ -662,11 +860,15 @@ void SetPause(bool pause)
     mutexUnlock(&EmuThreadLock);
     if (pause)
         condvarWakeOne(&FrameStartCond);
-    while (StateAtomic != StateInternal);
+    u64 time = armGetSystemTick();
+    while (StateAtomic != StateEmuThread);
 }
 
 void Stop()
 {
+    Frontend::UnloadROM(Frontend::ROMSlot_NDS);
+    Frontend::UnloadROM(Frontend::ROMSlot_GBA);
+    NDS::Stop();
     State = emuState_Nothing;
     StateAtomic = State;
 }
@@ -681,28 +883,45 @@ void Reset()
     mutexUnlock(&EmuThreadLock);
 }
 
-void DeriveScreenPoints(float* mat, Gfx::Vector2f* points)
+void DeriveScreenPoints(float* mat, Gfx::Vector2f* points, float scale)
 {
     points[0] = {0.f, 0.f};
     points[1] = {256.f, 0.f};
     points[2] = {0.f, 192.f};
     points[3] = {256.f, 192.f};
     for (int i = 0; i < 4; i++)
+    {
         Frontend::M23_Transform(mat, points[i].X, points[i].Y);
+        points[i] *= scale;
+    }
 }
 
 void UpdateScreenLayout()
 {
+    // we use the actual resolution otherwise integer scaling won't work properly
     int screenWidth = 1280;
     int screenHeight = 720;
+    if (appletGetOperationMode() == AppletOperationMode_Console)
+    {
+        screenWidth = 1920;
+        screenHeight = 1080;
+    }
+    TouchScale = screenHeight / 720.f;
+    float invTouchScale = 720.f / screenHeight;
     if ((Config::GlobalRotation % 2) == 1)
         std::swap(screenWidth, screenHeight);
+    const int screengap[] = {0, 1, 8, 64, 90, 128};
     Frontend::SetupScreenLayout(screenWidth, screenHeight,
-        Config::ScreenLayout, Config::ScreenRotation, Config::ScreenSizing, Config::ScreenGap, Config::IntegerScaling);
+        Config::ScreenLayout,
+        Config::ScreenRotation,
+        Config::ScreenSizing == 3 ? AutoScreenSizing : Config::ScreenSizing,
+        screengap[Config::ScreenGap],
+        Config::IntegerScaling,
+        Config::ScreenSwap);
     float topMatrix[6], bottomMatrix[6];
     Frontend::GetScreenTransforms(topMatrix, bottomMatrix);
-    DeriveScreenPoints(topMatrix, ScreenPoints[0]);
-    DeriveScreenPoints(bottomMatrix, ScreenPoints[1]);
+    DeriveScreenPoints(topMatrix, ScreenPoints[0], invTouchScale);
+    DeriveScreenPoints(bottomMatrix, ScreenPoints[1], invTouchScale);
 }
 
 }
@@ -710,6 +929,14 @@ void UpdateScreenLayout()
 namespace Platform
 {
 extern char ExecutableDir[];
+}
+
+void OnAppletHook(AppletHookType hook, void *param)
+{
+    if (hook == AppletHookType_OnPerformanceMode)
+    {
+        Emulation::UpdateScreenLayout();
+    }
 }
 
 int main(int argc, const char* argv[])
@@ -720,14 +947,35 @@ int main(int argc, const char* argv[])
     romfsInit();
     setInitialize();
 
+    padConfigureInput(1, HidNpadStyleSet_NpadFullCtrl);
+    padInitializeDefault(&Pad);
+
+    hidInitializeTouchScreen();
+
     Gfx::Init();
+
+    AppletHookCookie aptCookie;
+    appletHook(&aptCookie, OnAppletHook, NULL);
 
     Config::Load();
     strcpy(Config::FirmwarePath, "firmware.bin");
     strcpy(Config::BIOS9Path, "bios9.bin");
     strcpy(Config::BIOS7Path, "bios7.bin");
+    strcpy(Config::DSiBIOS9Path, "biosdsi9.rom");
+    strcpy(Config::DSiBIOS7Path, "biosdsi7.rom");
+    strcpy(Config::DSiFirmwarePath, "firmware_dsi.bin");
+    strcpy(Config::DSiNANDPath, "nand.bin");
+    strcpy(Config::DSiSDPath, "sd.bin");
+    {
+        FILE* f = Platform::OpenLocalFile("sd.bin", "rb");
+        Config::DSiSDEnable = f != nullptr;
+        if (f)
+            fclose(f);
+    }
 
+    ROMMetaDatabase::Init();
     Filebrowser::Init();
+    StartMenu::Init();
 
     Frontend::Init_ROM();
     Emulation::Init();
@@ -750,12 +998,12 @@ int main(int argc, const char* argv[])
             Emulation::UpdateAndDraw(keysDown, keysUp);
         }
         // the way we process input is weird, but we want to poll late
-        // so we have to do some gymnastics a bit
+        // so we have to do some gymnastics
         if (Emulation::State != Emulation::emuState_Running)
         {
-            hidScanInput();
-            keysUp = hidKeysUp(CONTROLLER_P1_AUTO);
-            keysDown = hidKeysDown(CONTROLLER_P1_AUTO);
+            padUpdate(&Pad);
+            keysDown = padGetButtonsDown(&Pad);
+            keysUp = padGetButtonsUp(&Pad);
         }
 
         switch (CurrentUiScreen)
@@ -789,9 +1037,13 @@ int main(int argc, const char* argv[])
 
     Emulation::DeInit();
     Frontend::DeInit_ROM();
+
+    StartMenu::DeInit();
     Filebrowser::DeInit();
 
     Config::Save();
+
+    appletUnhook(&aptCookie);
 
     Gfx::DeInit();
 

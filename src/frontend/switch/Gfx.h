@@ -112,6 +112,7 @@ union Vector2f
 
 union Color
 {
+public:
     Color(u32 packed)
     {
         R = ((packed >> 24) & 0xFF) / 255.f;
@@ -123,6 +124,11 @@ union Color
     Color(float r = 0.f, float g = 0.f, float b = 0.f, float a = 0.f)
         : R(r), G(g), B(b), A(a)
     {}
+
+    Color WithAlpha(float alpha) const
+    {
+        return {R, G, B, alpha};
+    }
 
     struct
     {
@@ -138,7 +144,6 @@ void DeInit();
 u32 TextureCreate(u32 width, u32 height, DkImageFormat format);
 void TextureDelete(u32 idx);
 // this is meant to be used sparsely
-// data and texture need to stay valid until the next Submit call
 void TextureUpload(u32 idx, u32 x, u32 y, u32 width, u32 height, void* data, u32 dataStrideBytes);
 
 void TextureSetSwizzle(u32 idx, DkSwizzle red, DkSwizzle green, DkSwizzle blue, DkSwizzle alpha);
@@ -172,12 +177,17 @@ void SetSmoothEdges(bool enabled);
 void PushScissor(u32 x, u32 y, u32 w, u32 h);
 void PopScissor();
 
-void DrawRectangle(Vector2f position, Vector2f size, Color tint);
-void DrawRectangle(u32 texIdx, Vector2f position, Vector2f size, Vector2f subPosition, Color tint);
+void DrawRectangle(Vector2f position, Vector2f size, Color tint, bool coolTransparency = false);
+void DrawRectangle(u32 texIdx,
+    Vector2f position, Vector2f size,
+    Vector2f subPosition,
+    Color tint,
+    bool coolTransparency = false);
 void DrawRectangle(u32 texIdx,
     Vector2f position, Vector2f size,
     Vector2f subPosition, Vector2f subSize,
-    Color tint);
+    Color tint,
+    bool coolTransparency = false);
 void DrawRectangle(u32 texIdx,
     Vector2f p0, Vector2f p1, Vector2f p2, Vector2f p3,
     Vector2f subPosition, Vector2f subSize);
@@ -201,15 +211,19 @@ enum
 #define GFX_NINTENDOFONT_WII_HAND "\uE062"
 #define GFX_NINTENDOFONT_WII_HAND_HOLD "\uE05D"
 
+Vector2f MeasureText(u32 fontIdx, float size, const char* text);
+
 Vector2f DrawText(u32 fontIdx, Vector2f position, float size, Color color, int horizontalAlign, int verticalAlign, const char* text);
 Vector2f DrawText(u32 fontIdx, Vector2f position, float size, Color color, const char* format, ...);
+
+static constexpr int AtlasSize = 1024;
 
 struct AtlasTexture
 {
     u32 Texture;
     u8* ClientImage;
 
-    int DirtyX1 = 0, DirtyY1 = 0, DirtyX2 = 0, DirtyY2 = 0;
+    int DirtyX1 = AtlasSize, DirtyY1 = AtlasSize, DirtyX2 = 0, DirtyY2 = 0;
 
     int PackingX = 0;
     int PackingY = 0;
@@ -224,8 +238,6 @@ struct PackedQuad
 
 struct Atlas
 {
-    static constexpr int AtlasSize = 1024;
-
     DkImageFormat TexFmt;
     u32 BytesPerPixel;
     DkImageSwizzle Swizzle[4] = {DkImageSwizzle_Red, DkImageSwizzle_Green, DkImageSwizzle_Blue, DkImageSwizzle_Alpha};

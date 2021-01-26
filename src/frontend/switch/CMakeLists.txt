@@ -17,6 +17,7 @@ SET(SOURCES_SWITCH
     SettingsDialog.cpp
     StartMenu.cpp
     FaultHandler.cpp
+    ErrorDialog.cpp
 
     ../Util_ROM.cpp
     ../Util_Audio.cpp
@@ -46,6 +47,8 @@ add_custom_command(OUTPUT control.nacp
                    COMMAND ${NACPTOOL} --create "melonDS switch fast alpha" "Arisotura, RSDuck, Hydr8gon" "release 5" ${CMAKE_BINARY_DIR}/control.nacp)
 
 make_directory(${CMAKE_BINARY_DIR}/romfs/shaders)
+
+configure_file(${CMAKE_SOURCE_DIR}/icon/melon_128x128.png ${CMAKE_BINARY_DIR}/romfs/melon_128x128.png COPYONLY)
 
 function(compile_shader stage filename)
     add_custom_command(OUTPUT romfs/shaders/${filename}.dksh

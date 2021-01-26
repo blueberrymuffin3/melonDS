@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "Filebrowser.h"
+#include "StartMenu.h"
 
 #include "Style.h"
 #include "ROMMetaDatabase.h"
@@ -15,6 +16,7 @@
 #include <vector>
 #include <string>
 #include <dirent.h>
+#include <assert.h>
 
 namespace Filebrowser
 {
@@ -30,38 +32,23 @@ std::string CurrentPath;
 std::string SearchText;
 int CurrentSelection = -1;
 
-int TitleLanguage;
+SwkbdConfig SearchKeyboard;
 
 void Init()
 {
-    InferSystemLanguage();
-
     EnterDirectory(Config::LastROMFolder);
+
+    swkbdCreate(&SearchKeyboard, 0);
+    swkbdConfigMakePresetDefault(&SearchKeyboard);
+    swkbdConfigSetOkButtonText(&SearchKeyboard, "Go");
+    swkbdConfigSetHeaderText(&SearchKeyboard, "Enter text to search for");
 }
 
 void DeInit()
 {
-    strcpy(Config::LastROMFolder, CurrentPath.c_str());
-}
+    swkbdClose(&SearchKeyboard);
 
-void InferSystemLanguage()
-{
-    u64 langCode;
-    setGetSystemLanguage(&langCode);
-    char langCodeStr[8];
-    memcpy(langCodeStr, &langCode, 8);
-    if (!strcmp(langCodeStr, "ja"))
-        TitleLanguage = ROMMetaDatabase::titleLang_Japanese;
-    else if (!strcmp(langCodeStr, "fr") || !strcmp(langCodeStr, "fr-CA"))
-        TitleLanguage = ROMMetaDatabase::titleLang_French;
-    else if (!strcmp(langCodeStr, "de"))
-        TitleLanguage = ROMMetaDatabase::titleLang_German;
-    else if (!strcmp(langCodeStr, "it"))
-        TitleLanguage = ROMMetaDatabase::titleLang_Italian;
-    else if (!strcmp(langCodeStr, "es") || !strcmp(langCodeStr, "es-419"))
-        TitleLanguage = ROMMetaDatabase::titleLang_Spanish;
-    else // the rest of you get English
-        TitleLanguage = ROMMetaDatabase::titleLang_English;
+    strcpy(Config::LastROMFolder, CurrentPath.c_str());
 }
 
 int PushString(std::vector<char>& container, const char* str)
@@ -94,6 +81,7 @@ void EnterDirectory(const char* path)
     if (CurrentPath != "/")
         CurrentEntries.push_back({PushString(CurrentEntryNames, ".."), -1, true});
 
+    std::string fullpath;
     struct dirent* cur;
     while (cur = readdir(dir))
     {
@@ -119,7 +107,14 @@ void EnterDirectory(const char* path)
                 continue;*/
 
             if (!notNdsFile)
-                entry.ROMDBEntry = ROMMetaDatabase::QueryMeta(cur->d_name, CurrentPath.c_str());
+            {
+                fullpath.clear();
+                fullpath = CurrentPath;
+                if (CurrentPath != "/")
+                    fullpath += '/';
+                fullpath += cur->d_name;
+                entry.ROMDBEntry = ROMMetaDatabase::QueryMeta(cur->d_name, fullpath.c_str());
+            }
         }
         else if (cur->d_type != DT_DIR)
         {
@@ -140,6 +135,8 @@ void EnterDirectory(const char* path)
         else
             return a.IsDirectory;
     });
+
+    ROMMetaDatabase::UpdateTexture();
 }
 
 void GoUpwards()
@@ -176,7 +173,7 @@ int FindNextOccurence(const char* searchText)
     {
         // if there's a proper title first search it
         if (CurrentEntries[i].ROMDBEntry != -1
-            && strcasestr(ROMMetaDatabase::Database[CurrentEntries[i].ROMDBEntry].Title(TitleLanguage),
+            && strcasestr(ROMMetaDatabase::Database[CurrentEntries[i].ROMDBEntry].Title(ROMMetaDatabase::TitleLanguage),
                 searchText))
             return i;
 
@@ -197,7 +194,8 @@ int FindNextOccurence(const char* searchText)
 std::string CurrentSelectionPath()
 {
     std::string result(CurrentPath);
-    result += '/';
+    if (CurrentPath != "/")
+        result += '/';
     result += &CurrentEntryNames[CurrentEntries[CurrentSelection].Name];
     return result;
 }
@@ -237,7 +235,7 @@ void DoGui(BoxGui::Frame& parent)
         if (!entryFrame.IsVisible())
             continue;
 
-        Gfx::DrawRectangle(entryFrame.Area.Position - Gfx::Vector2f{0.f, 5.f}, entryFrame.Area.Size + Gfx::Vector2f{0.f, 5.f*2.f}, WidgetColorBright);
+        Gfx::DrawRectangle(entryFrame.Area.Position - Gfx::Vector2f{0.f, 5.f}, entryFrame.Area.Size + Gfx::Vector2f{0.f, 5.f*2.f}, WidgetColorBright, true);
         if (CurrentSelection == i)
             Gfx::DrawRectangle(entryFrame.Area.Position, entryFrame.Area.Size, WidgetColorVibrant);
 
@@ -258,11 +256,19 @@ void DoGui(BoxGui::Frame& parent)
 
             skewer.Advance(20.f); 
 
-            Gfx::DrawText(Gfx::SystemFontStandard, skewer.CurrentPosition(), TextLineHeight, DarkColor, Gfx::align_Left, Gfx::align_Center, meta.Title(TitleLanguage));
+            Gfx::DrawText(Gfx::SystemFontStandard,
+                skewer.CurrentPosition(), TextLineHeight,
+                DarkColor,
+                Gfx::align_Left, Gfx::align_Center,
+                meta.Title(ROMMetaDatabase::TitleLanguage));
         }
         else
         {
-            Gfx::DrawText(Gfx::SystemFontStandard, skewer.CurrentPosition(), TextLineHeight, DarkColor, Gfx::align_Left, Gfx::align_Center, &CurrentEntryNames[entry.Name]);
+            Gfx::DrawText(Gfx::SystemFontStandard,
+                skewer.CurrentPosition(), TextLineHeight,
+                DarkColor,
+                Gfx::align_Left, Gfx::align_Center,
+                &CurrentEntryNames[entry.Name]);
         }
 
         if (i > 0)
@@ -279,18 +285,11 @@ void DoGui(BoxGui::Frame& parent)
     KeyExplanation::Explain(KeyExplanation::button_Y, "Search");
     if (BoxGui::SearchPressed())
     {
-        SwkbdConfig keyboard;
-        swkbdCreate(&keyboard, 0);
-    
-        swkbdConfigSetOkButtonText(&keyboard, "Go");
-        swkbdConfigSetHeaderText(&keyboard, "Enter text to search for");
-        swkbdConfigSetTextCheckCallback(&keyboard, CheckSearch);
-        swkbdConfigSetInitialCursorPos(&keyboard, 1); // 1 = end
-        swkbdConfigSetInitialText(&keyboard, SearchText.c_str());
-        swkbdConfigSetBlurBackground(&keyboard, 1);
+        swkbdConfigSetTextCheckCallback(&SearchKeyboard, CheckSearch);
+        swkbdConfigSetInitialText(&SearchKeyboard, SearchText.c_str());
 
-        char searchText[256];
-        Result r = swkbdShow(&keyboard, searchText, 256);
+        char searchText[256] = "";
+        Result r = swkbdShow(&SearchKeyboard, searchText, 256);
         SearchText = searchText;
         Gfx::SkipTimestep();
 
@@ -303,8 +302,6 @@ void DoGui(BoxGui::Frame& parent)
                 BoxGui::ForceSelecton(BoxGui::MakeUniqueName(FileBrowserPrefix, newSelection), false);
             }
         }
-
-        swkbdClose(&keyboard);
     }
 
     if (CurrentSelection != -1)
@@ -340,6 +337,8 @@ void DoGui(BoxGui::Frame& parent)
             {
                 std::string romPath = CurrentSelectionPath();
                 Emulation::LoadROM(romPath.c_str());
+                StartMenu::PushLastPlayed(romPath, CurrentEntries[CurrentSelection].ROMDBEntry);
+                BoxGui::ForceSelecton(BoxGui::MakeUniqueName(FileBrowserPrefix, 0), false);
             }
         }
     
@@ -353,8 +352,6 @@ void DoGui(BoxGui::Frame& parent)
             }
         }
     }
-
-    ROMMetaDatabase::IconAtlas.IssueUpload();
 }
 
 }

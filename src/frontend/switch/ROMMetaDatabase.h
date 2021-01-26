@@ -28,10 +28,17 @@ struct ROMMeta
     const char* Title(int lang);
 };
 
+
 extern Gfx::Atlas IconAtlas;
 extern std::vector<ROMMeta> Database;
 
-int QueryMeta(const char* romname, const char* directory);
+extern int TitleLanguage;
+
+int QueryMeta(const char* romname, const char* path);
+
+void Init();
+
+void UpdateTexture();
 
 }
 

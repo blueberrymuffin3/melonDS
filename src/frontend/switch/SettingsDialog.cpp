@@ -35,7 +35,7 @@ void DoSlider(BoxGui::Frame& parent, BoxGui::Skewer& skewer, const char* name, i
     }
 
     // a bit wasteful
-    Gfx::DrawRectangle(settingFrame.Area.Position - Gfx::Vector2f{0.f, 5.f}, settingFrame.Area.Size + Gfx::Vector2f{0.f, 5.f*2.f}, WidgetColorBright);
+    Gfx::DrawRectangle(settingFrame.Area.Position - Gfx::Vector2f{0.f, 5.f}, settingFrame.Area.Size + Gfx::Vector2f{0.f, 5.f*2.f}, WidgetColorBright, true);
 
     if (selected)
         Gfx::DrawRectangle(settingFrame.Area.Position, settingFrame.Area.Size, WidgetColorVibrant);
@@ -81,7 +81,7 @@ void DoCheckbox(BoxGui::Frame& parent, BoxGui::Skewer& skewer, const char* name,
     }
 
     // a bit wasteful
-    Gfx::DrawRectangle(settingFrame.Area.Position - Gfx::Vector2f{0.f, 5.f}, settingFrame.Area.Size + Gfx::Vector2f{0.f, 5.f*2.f}, WidgetColorBright);
+    Gfx::DrawRectangle(settingFrame.Area.Position - Gfx::Vector2f{0.f, 5.f}, settingFrame.Area.Size + Gfx::Vector2f{0.f, 5.f*2.f}, WidgetColorBright, true);
 
     if (selected)
         Gfx::DrawRectangle(settingFrame.Area.Position, settingFrame.Area.Size, WidgetColorVibrant);
@@ -135,7 +135,7 @@ void DoCombobox(BoxGui::Frame& parent, BoxGui::Skewer& skewer, const char* name,
                 Size.X = std::min(Size.X, 720.f);
                 BoxGui::Frame dialogFrame{rootFrame, rootFrame.Area.CenteredChild(Size)};
 
-                Gfx::DrawRectangle(dialogFrame.Area.Position, dialogFrame.Area.Size, WidgetColorBright);
+                Gfx::DrawRectangle(dialogFrame.Area.Position, dialogFrame.Area.Size, WidgetColorBright, true);
 
                 BoxGui::Skewer optionsSkewer{dialogFrame, 0.f, BoxGui::direction_Vertical};
                 optionsSkewer.AlignLeft(30.f);
@@ -218,7 +218,7 @@ void DoCombobox(BoxGui::Frame& parent, BoxGui::Skewer& skewer, const char* name,
         KeyExplanation::Explain(KeyExplanation::button_A, "Choose");
     }
 
-    Gfx::DrawRectangle(settingFrame.Area.Position - Gfx::Vector2f{0.f, 5.f}, settingFrame.Area.Size + Gfx::Vector2f{0.f, 5.f*2.f}, WidgetColorBright);
+    Gfx::DrawRectangle(settingFrame.Area.Position - Gfx::Vector2f{0.f, 5.f}, settingFrame.Area.Size + Gfx::Vector2f{0.f, 5.f*2.f}, WidgetColorBright, true);
     if (selected)
         Gfx::DrawRectangle(settingFrame.Area.Position, settingFrame.Area.Size, WidgetColorVibrant);
 
@@ -256,7 +256,7 @@ void SectionHeader(BoxGui::Frame& parent, BoxGui::Skewer& skewer, const char* na
     skewer.Advance(height);
     BoxGui::Frame nameFrame{parent, skewer.Spit({parent.Area.Size.X * 0.6f, height}, Gfx::align_Right), {5.f, 0.f}, {5.f, 15.f}};
 
-    Gfx::DrawRectangle(nameFrame.Area.Position - Gfx::Vector2f{0.f, 15.f}, nameFrame.Area.Size + Gfx::Vector2f{0.f, 15.f*2.f}, WidgetColorBright);
+    Gfx::DrawRectangle(nameFrame.Area.Position - Gfx::Vector2f{0.f, 15.f}, nameFrame.Area.Size + Gfx::Vector2f{0.f, 15.f*2.f}, WidgetColorBright, true);
     Gfx::DrawText(Gfx::SystemFontStandard, nameFrame.Area.Position + Gfx::Vector2f{10.f, 0.f}, height, DarkColor, "%s", name);
 }
 
@@ -278,14 +278,13 @@ void DoGui(BoxGui::Frame& parent)
         title = "Emulation settings";
         {
             SectionHeader(settingsFrame, settingsSkewer, "General");
-            bool bootDirectly = Config::DirectBoot;
-            bool limitFramerate = Config::LimitFramerate;
-            DoCheckbox(settingsFrame, settingsSkewer, "Boot directly (Skip bios)", bootDirectly, true);
-            DoCombobox(settingsFrame, settingsSkewer, "Console mode", "DS\0DSi (experimental)\0", Config::ConsoleType);
-            DoCheckbox(settingsFrame, settingsSkewer, "Limit framerate", limitFramerate);
-
-            Config::DirectBoot = bootDirectly;
-            Config::LimitFramerate = limitFramerate;
+            DoCombobox(settingsFrame, settingsSkewer, "Console mode", "DS\0DSi (experimental)\0", Config::ConsoleType, true);
+            if (Config::ConsoleType == 0)
+            {
+                bool bootDirectly = Config::DirectBoot;
+                DoCheckbox(settingsFrame, settingsSkewer, "Boot directly (Skip bios)", bootDirectly);
+                Config::DirectBoot = bootDirectly;
+            }
         }
         {
             bool jitEnable = Config::JIT_Enable;
@@ -310,7 +309,13 @@ void DoGui(BoxGui::Frame& parent)
         }
         break;
     case uiScreen_DisplaySettings:
-        title = "Display settings";
+        title = "Presentation settings";
+        {
+            SectionHeader(settingsFrame, settingsSkewer, "Framerate");
+            bool limitFramerate = Config::LimitFramerate;
+            DoCheckbox(settingsFrame, settingsSkewer, "Limit framerate", limitFramerate, true);
+            Config::LimitFramerate = limitFramerate;
+        }
         {
             SectionHeader(settingsFrame, settingsSkewer, "GUI");
 
@@ -326,6 +331,9 @@ void DoGui(BoxGui::Frame& parent)
             DoCombobox(settingsFrame, settingsSkewer, "Sizing", "Even\0Emphasise top\0Emphasise bottom\0Auto\0", Config::ScreenSizing);
             DoCombobox(settingsFrame, settingsSkewer, "Gap", "0px\0001px\08px\00064px\090px\000128px\0", Config::ScreenGap);
             DoCombobox(settingsFrame, settingsSkewer, "Layout", "Natural\0Vertical\0Horizontal\0", Config::ScreenLayout);
+            bool screenSwap = Config::ScreenSwap;
+            DoCheckbox(settingsFrame, settingsSkewer, "Swap screens", screenSwap);
+            Config::ScreenSwap = screenSwap;
             bool integerScaling = Config::IntegerScaling;
             DoCheckbox(settingsFrame, settingsSkewer, "Integer scaling", integerScaling);
             Config::IntegerScaling = integerScaling;
@@ -340,6 +348,9 @@ void DoGui(BoxGui::Frame& parent)
             
             DoCombobox(settingsFrame, settingsSkewer, "Cursor mode", "Mouse mode\0Offset mode\0Motion controls!\0", Config::TouchscreenMode, true);
             DoCombobox(settingsFrame, settingsSkewer, "Click mode", "Hold\0Toggle\0", Config::TouchscreenClickMode);
+            bool leftHanded = Config::LeftHandedMode;
+            DoCheckbox(settingsFrame, settingsSkewer, "Left handed mode", leftHanded);
+            Config::LeftHandedMode = leftHanded;
         }
         break;
     }

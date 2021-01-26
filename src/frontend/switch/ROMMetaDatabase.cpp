@@ -16,16 +16,40 @@ std::vector<ROMMeta> Database;
 std::unordered_map<std::string, int> DatabaseByName;
 Gfx::Atlas IconAtlas{DkImageFormat_RGB5A1_Unorm, 2};
 
+int TitleLanguage;
+
 const char* ROMMeta::Title(int lang)
 {
     return &TitlesData[TitlesOffset[lang]];
 }
 
-int QueryMeta(const char* romname, const char* directory)
+void UpdateTexture()
 {
-    struct stat fileinfo;
-    stat(romname, &fileinfo);
+    ROMMetaDatabase::IconAtlas.IssueUpload();
+}
 
+void Init()
+{
+    u64 langCode;
+    setGetSystemLanguage(&langCode);
+    char langCodeStr[8];
+    memcpy(langCodeStr, &langCode, 8);
+    if (!strcmp(langCodeStr, "ja"))
+        TitleLanguage = ROMMetaDatabase::titleLang_Japanese;
+    else if (!strcmp(langCodeStr, "fr") || !strcmp(langCodeStr, "fr-CA"))
+        TitleLanguage = ROMMetaDatabase::titleLang_French;
+    else if (!strcmp(langCodeStr, "de"))
+        TitleLanguage = ROMMetaDatabase::titleLang_German;
+    else if (!strcmp(langCodeStr, "it"))
+        TitleLanguage = ROMMetaDatabase::titleLang_Italian;
+    else if (!strcmp(langCodeStr, "es") || !strcmp(langCodeStr, "es-419"))
+        TitleLanguage = ROMMetaDatabase::titleLang_Spanish;
+    else // the rest of you get English
+        TitleLanguage = ROMMetaDatabase::titleLang_English;
+}
+
+int QueryMeta(const char* romname, const char* path)
+{
     auto it = DatabaseByName.find(romname);
     if (it != DatabaseByName.end())
     {
@@ -35,18 +59,7 @@ int QueryMeta(const char* romname, const char* directory)
     ROMMeta meta;
     meta.HasIcon = false;
 
-    std::string path(directory);
-    if (path == "/")
-    {
-        path += romname;
-    }
-    else
-    {
-        path += '/';
-        path += romname;
-    }
-
-    FILE* rom = fopen(path.c_str(), "rb");
+    FILE* rom = fopen(path, "rb");
     assert(rom && "rom needs to be readable!");
 
     u32 iconTitleOffset = 0;
@@ -132,6 +145,7 @@ int QueryMeta(const char* romname, const char* directory)
             }
         }
     }
+    fclose(rom);
 
     if (!hasTitle)
     {
@@ -141,7 +155,6 @@ int QueryMeta(const char* romname, const char* directory)
         TitlesData.resize(TitlesData.size() + strlen(romname) + 1);
         strcpy(&TitlesData[meta.TitlesOffset[0]], romname);
     }
-    fclose(rom);
 
     int result = Database.size();
     DatabaseByName[romname] = result;

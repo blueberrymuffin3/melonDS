@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <assert.h>
 
 #include "../../Platform.h"
 
@@ -49,6 +50,11 @@ FILE* OpenDataFile(const char* path)
 	return OpenLocalFile(path, "rb");
 }
 
+void Sleep(u64 usecs)
+{
+    svcSleepThread(usecs * 1000);
+}
+
 void ThreadEntry(void* param)
 {
     ((void (*)())param)();
@@ -59,7 +65,7 @@ void ThreadEntry(void* param)
 Thread* Thread_Create(void (*func)())
 {
     ::Thread* thread = new ::Thread();
-    auto res = threadCreate(thread, ThreadEntry, (void*)func, NULL, STACK_SIZE, 0x2C, 2);
+    threadCreate(thread, ThreadEntry, (void*)func, NULL, STACK_SIZE, 0x1F, 2);
     threadStart(thread);
     return (Thread*)thread;
 }
@@ -75,10 +81,19 @@ void Thread_Wait(Thread* thread)
     threadWaitForExit((::Thread*)thread);
 }
 
+struct MySemaphore
+{
+    ::CondVar condvar;
+    ::Mutex mutex;
+    u64 count;
+};
+
 Semaphore* Semaphore_Create()
 {
-    ::Semaphore* sema = new ::Semaphore();
-    semaphoreInit(sema, 0);
+    MySemaphore* sema = new MySemaphore();
+    sema->count = 0;
+    mutexInit(&sema->mutex);
+    condvarInit(&sema->mutex);
     return (Semaphore*)sema;
 }
 
@@ -89,18 +104,31 @@ void Semaphore_Free(Semaphore* sema)
 
 void Semaphore_Reset(Semaphore* sema)
 {
-    while(semaphoreTryWait((::Semaphore*)sema));
+    MySemaphore* mysema = (MySemaphore*)sema;
+    mutexLock(&mysema->mutex);
+    mysema->count = 0;
+    mutexUnlock(&mysema->mutex);
 }
 
 void Semaphore_Wait(Semaphore* sema)
 {
-    semaphoreWait((::Semaphore*)sema);
+    MySemaphore* mysema = (MySemaphore*)sema;
+    mutexLock(&mysema->mutex);
+    while (mysema->count == 0)
+        condvarWait(&mysema->condvar, &mysema->mutex);
+    mysema->count--;
+    mutexUnlock(&mysema->mutex);
 }
 
 void Semaphore_Post(Semaphore* sema, int num)
 {
-    for (int i = 0; i < num; i++)
-        semaphoreSignal((::Semaphore*)sema);
+    if (num <= 0) return;
+
+    MySemaphore* mysema = (MySemaphore*)sema;
+    mutexLock(&mysema->mutex);
+    mysema->count += num;
+    mutexUnlock(&mysema->mutex);
+    condvarWake(&mysema->condvar, num);
 }
 
 Mutex* Mutex_Create()

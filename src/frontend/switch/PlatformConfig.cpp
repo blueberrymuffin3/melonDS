@@ -7,15 +7,21 @@ int GlobalRotation;
 
 int TouchscreenMode;
 int TouchscreenClickMode;
+int LeftHandedMode;
 
 int ScreenRotation;
 int ScreenGap;
 int ScreenLayout;
+int ScreenSwap;
 int ScreenSizing;
 int Filtering;
 int IntegerScaling;
 
+int SavestateRelocSRAM;
+
 char LastROMFolder[512];
+
+char LastROMPath[5][512];
 
 int SwitchOverclock;
 
@@ -32,13 +38,23 @@ ConfigEntry PlatformConfigFile[] =
     
     {"TouchscreenMode",         0, &TouchscreenMode,        0, NULL, 0},
     {"TouchscreenClickMode",    0, &TouchscreenClickMode,   0, NULL, 0},
+    {"LeftHandedMode",          0, &LeftHandedMode,         0, NULL, 0},
+
+    {"SavStaRelocSRAM",         0, &SavestateRelocSRAM,     0, NULL, 0},
 
     {"ScreenRotation",          0, &ScreenRotation,         0, NULL, 0},
     {"ScreenGap",               0, &ScreenGap,              0, NULL, 0},
     {"ScreenLayout",            0, &ScreenLayout,           0, NULL, 0},
+    {"ScreenSwap",              0, &ScreenSwap,             0, NULL, 0},
     {"ScreenSizing",            0, &ScreenSizing,           0, NULL, 0},
     {"Filtering",               0, &Filtering,              1, NULL, 0},
     {"IntegerScaling",          0, &IntegerScaling,         0, NULL, 0},
+
+    {"LastROMPath0",            1, LastROMPath[0],            0, "",   511},
+    {"LastROMPath1",            1, LastROMPath[1],            0, "",   511},
+    {"LastROMPath2",            1, LastROMPath[2],            0, "",   511},
+    {"LastROMPath3",            1, LastROMPath[3],            0, "",   511},
+    {"LastROMPath4",            1, LastROMPath[4],            0, "",   511},
 
     {"LastROMFolder",           1, LastROMFolder,           0, "/", 511},
 

@@ -27,6 +27,7 @@ enum
 extern int State;
 
 void LoadROM(const char* file);
+void LoadBIOS();
 void SetPause(bool pause);
 void Stop();
 void Reset();

@@ -12,12 +12,21 @@
 namespace BoxGui
 {
 
+std::optional<std::function<bool(Frame&)>> CurrentModalDialog;
+
+int ModalLevel()
+{
+    return CurrentModalDialog ? 1 : 0;
+}
+
 struct ScrollFrame
 {
+    int ModalLevel;
     float ScrollMin = 0.f, ScrollMax = 0.f;
     float Scroll = 0.f;
     int Axis;
     Rect Area;
+    bool StillUsed;
 };
 std::unordered_map<u64, ScrollFrame> ScrollFrames;
 float ScrollTime = 0.f;
@@ -50,6 +59,8 @@ Frame::Frame(Frame& parent, Rect area,
         ScrollFrame& scrollFrame = ScrollFrames[scrollId];
         scrollFrame.Area = Area;
         scrollFrame.Axis = scrollAxis;
+        scrollFrame.StillUsed = true;
+        scrollFrame.ModalLevel = ModalLevel();
         ScrollOffset = scrollFrame.Scroll;
         ScrollId = scrollId;
 
@@ -124,17 +135,10 @@ float Skewer::RemainingLength()
     return Parent.Area.Size.Components[Axis] - Offset.Components[Axis];
 }
 
-std::optional<std::function<bool(Frame&)>> CurrentModalDialog;
-
-int ModalLevel()
-{
-    return CurrentModalDialog ? 1 : 0;
-}
-
 struct InputFrame
 {
     Rect Area;
-    uintptr_t Parent; // pointer is only used as an ID
+    uintptr_t Parents[8]; // pointer is only used as an ID
     u64 ParentScrollId;
 };
 std::unordered_map<u64, InputFrame> InputFrames;
@@ -145,7 +149,18 @@ u64 NextSelection[2];
 
 bool InputElement(Frame& frame, u64 uniqueName, bool first)
 {
-    InputFrames[uniqueName] = {frame.Area, (uintptr_t)frame.Parent, frame.Parent ? frame.Parent->ScrollId : UINT64_MAX};
+    InputFrame inputFrame;
+    inputFrame.Area = frame.Area;
+    inputFrame.ParentScrollId = frame.Parent ? frame.Parent->ScrollId : UINT64_MAX;
+    inputFrame.Parents[0] = (uintptr_t)frame.Parent;
+    for (int i = 1; i < 8; i++)
+    {
+        if (inputFrame.Parents[i - 1])
+            inputFrame.Parents[i] = (uintptr_t)((Frame*)inputFrame.Parents[i - 1])->Parent;
+        else
+            inputFrame.Parents[i] = 0;
+    }
+    InputFrames[uniqueName] = inputFrame;
 
     // this is a dirty trick
     if (FirstElement == UINT64_MAX || first)
@@ -190,22 +205,22 @@ u64 KeysToRepeat = 0;
 
 bool ConfirmPressed()
 {
-    return KeysDown & KEY_A;
+    return KeysDown & HidNpadButton_A;
 }
 
 bool CancelPressed()
 {
-    return KeysDown & KEY_B;
+    return KeysDown & HidNpadButton_B;
 }
 
 bool SearchPressed()
 {
-    return KeysDown & KEY_Y;
+    return KeysDown & HidNpadButton_Y;
 }
 
 bool DetailsPressed()
 {
-    return KeysDown & KEY_PLUS;
+    return KeysDown & HidNpadButton_Plus;
 }
 
 u32 DirectionsCaptured = 0;
@@ -213,13 +228,13 @@ u32 DirectionsCaptured = 0;
 bool LeftPressed()
 {
     DirectionsCaptured |= 1;
-    return KeysDown & KEY_LEFT;
+    return KeysDown & HidNpadButton_Left;
 }
 
 bool RightPressed()
 {
     DirectionsCaptured |= 1<<1;
-    return KeysDown & KEY_RIGHT;
+    return KeysDown & HidNpadButton_Right;
 }
 
 void OpenModalDialog(std::function<bool(Frame&)> modalFunc)
@@ -248,19 +263,12 @@ void Update(Frame& rootFrame, u64 keysDown, u64 keysUp)
     KeysDown = keysDown;
     if (KeysToRepeat == 0)
     {
-        KeyRepeatTime = 0.18f;
-        KeysToRepeat = KeysDown & (KEY_UP|KEY_DOWN|KEY_LEFT|KEY_RIGHT);
+        KeyRepeatTime = 0.22f;
+        KeysToRepeat = keysDown & (HidNpadButton_AnyUp|HidNpadButton_AnyDown|HidNpadButton_AnyLeft|HidNpadButton_AnyRight);
     }
     if (keysUp & KeysToRepeat)
     {
-        if (keysUp & KEY_UP)
-            KeysToRepeat &= ~KEY_UP;
-        if (keysUp & KEY_DOWN)
-            KeysToRepeat &= ~KEY_DOWN;
-        if (keysUp & KEY_LEFT)
-            KeysToRepeat &= ~KEY_LEFT;
-        if (keysUp & KEY_RIGHT)
-            KeysToRepeat &= ~KEY_RIGHT;
+        KeysToRepeat = 0;
         KeyRepeatTime = 0.f;
     }
 
@@ -300,37 +308,100 @@ void Update(Frame& rootFrame, u64 keysDown, u64 keysUp)
     int axis = -1;
     int direction = 0;
 
-    if (keysDown & KEY_UP)
+    if (keysDown & HidNpadButton_AnyUp)
     {
         axis = 1;
         direction = -1;
     }
-    else if (keysDown & KEY_DOWN)
+    else if (keysDown & HidNpadButton_AnyDown)
     {
         axis = 1;
         direction = 1;
     }
-    else if (keysDown & KEY_LEFT && !(DirectionsCaptured & 1))
+    else if (keysDown & HidNpadButton_AnyLeft && !(DirectionsCaptured & 1))
     {
         axis = 0;
         direction = -1;
     }
-    else if (keysDown & KEY_RIGHT && !(DirectionsCaptured & (1<<1)))
+    else if (keysDown & HidNpadButton_AnyRight && !(DirectionsCaptured & (1<<1)))
     {
         axis = 0;
         direction = 1;
     }
+    DirectionsCaptured = 0;
 
     if (axis != -1)
     {
         InputFrame currentInput = InputFrames[CurrentSelections[ModalLevel()]];
-        u64 bestCandidate = UINT64_MAX;
+        for (int i = 0; i < 8; i++)
+        {
+            uintptr_t parent = currentInput.Parents[i];
+            if (!parent)
+                break;
+
+            u64 bestCandidate = UINT64_MAX;
+            float bestCandidateDistance = infinityf();
+            float bestCandidateDistanceSecondary = infinityf();
+
+            float offset = currentInput.Area.Position.Components[axis];
+            if (direction == 1)
+                offset += currentInput.Area.Size.Components[axis];
+            float offsetSecondary = currentInput.Area.Position.Components[axis ^ 1] + currentInput.Area.Size.Components[axis ^ 1] * 0.5f;
+
+            for (auto& it : InputFrames)
+            {
+                if (it.first == CurrentSelections[ModalLevel()])
+                    continue;
+
+                bool sharesParent = false;
+                for (int i = 0; i < 8; i++)
+                {
+                    if (it.second.Parents[i] == parent)
+                    {
+                        sharesParent = true;
+                        break;
+                    }
+                }
+                if (!sharesParent)
+                    continue;
+
+                float itCompValue = it.second.Area.Position.Components[axis];
+                if (direction == -1)
+                    itCompValue += it.second.Area.Size.Components[axis];
+                float itCompValueSecondary = it.second.Area.Position.Components[axis ^ 1] + it.second.Area.Size.Components[axis ^ 1] * 0.5f;
+
+                float distance = (itCompValue - offset) * direction;
+                float distanceSecondary = fabsf(itCompValueSecondary - offsetSecondary);
+
+                if (distance > 0.f && distance < bestCandidateDistance)
+                {
+                    bestCandidate = it.first;
+                    bestCandidateDistance = distance;
+                    bestCandidateDistanceSecondary = distanceSecondary;
+                }
+                if (fabsf(distance - bestCandidateDistance) < 0.01f && distanceSecondary < bestCandidateDistanceSecondary)
+                {
+                    bestCandidate = it.first;
+                    bestCandidateDistance = distance;
+                    bestCandidateDistanceSecondary = distanceSecondary;
+                }
+            }
+
+            if (bestCandidate != UINT64_MAX)
+            {
+                NextSelection[ModalLevel()] = bestCandidate;
+                break;
+            }
+        }
+        /*u64 bestCandidate = UINT64_MAX;
         bool bestCandidateIsSibling = false;
         float bestCandidateDistance = infinityf();
+        float bestCandidateDistanceSecondary = infinityf();
 
         float offset = currentInput.Area.Position.Components[axis];
         if (direction == 1)
             offset += currentInput.Area.Size.Components[axis];
+        float offsetSecondary = currentInput.Area.Position.Components[axis ^ 1];
 
         for (auto& it : InputFrames)
         {
@@ -346,11 +417,21 @@ void Update(Frame& rootFrame, u64 keysDown, u64 keysUp)
 
             if (bestCandidateIsSibling && !isSibling)
                 continue;
+            float itCompValueSecondary = it.second.Area.Position.Components[axis ^ 1];
+            float distanceSecondary = fabsf(itCompValueSecondary - offsetSecondary);
 
             if (distance > 0.f && (distance < bestCandidateDistance || (!bestCandidateIsSibling && isSibling)))
             {
                 bestCandidate = it.first;
                 bestCandidateDistance = distance;
+                bestCandidateDistanceSecondary = distanceSecondary;
+                bestCandidateIsSibling = isSibling;
+            }
+            if (distanceSecondary > 0.f && fabsf(distance - bestCandidateDistance) < 0.01f && distanceSecondary < bestCandidateDistanceSecondary)
+            {
+                bestCandidate = it.first;
+                bestCandidateDistance = distance;
+                bestCandidateDistanceSecondary = distanceSecondary;
                 bestCandidateIsSibling = isSibling;
             }
         }
@@ -358,7 +439,7 @@ void Update(Frame& rootFrame, u64 keysDown, u64 keysUp)
         if (bestCandidate != UINT64_MAX)
         {
             NextSelection[ModalLevel()] = bestCandidate;
-        }
+        }*/
     }
 
     {
@@ -418,6 +499,19 @@ void Update(Frame& rootFrame, u64 keysDown, u64 keysUp)
                 ScrollTime = 0.f;
             }
         }
+    }
+
+    {
+        std::vector<u64> unusedScrollFrames;
+        for (auto& it : ScrollFrames)
+        {
+            if (it.second.ModalLevel == ModalLevel() && !it.second.StillUsed)
+                unusedScrollFrames.push_back(it.first);
+            else
+                it.second.StillUsed = false;
+        }
+        for (u32 i = 0; i < unusedScrollFrames.size(); i++)
+            ScrollFrames.erase(unusedScrollFrames[i]);
     }
 
     InputFrames.clear();

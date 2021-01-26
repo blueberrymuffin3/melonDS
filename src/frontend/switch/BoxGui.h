@@ -73,6 +73,11 @@ struct Frame
         return Parent ? Parent->Area.Intersects({Area.Position - LowerMargin, Area.Size + LowerMargin + UpperMargin}) : true;
     }
 
+    Rect UnpaddedArea()
+    {
+        return {Area.Position - LowerMargin, Area.Size + LowerMargin + UpperMargin};
+    }
+
     // lower as in lower in the coordinates, not on screen
     Rect Area;
     Frame* Parent;

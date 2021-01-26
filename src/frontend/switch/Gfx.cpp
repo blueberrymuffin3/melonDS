@@ -130,6 +130,7 @@ class GpuMemHeap
     Block* SplitBlockRight(Block* block, u32 offset)
     {
         assert(!block->Free);
+        assert(offset < block->Size);
         Block* newBlock = BlockListPopFront(BlockPoolUnused);
 
         newBlock->Offset = block->Offset + offset;
@@ -249,7 +250,7 @@ public:
         Block* block = SecondFreeList[(fl - 5) * 32 + sl];
         UnmarkFree(block);
 
-        // align within the block and put that back
+        // align within the block
         if ((block->Offset & (align - 1)) > 0)
         {
             assert(align > 32);
@@ -270,6 +271,7 @@ public:
     void Free(Allocation allocation)
     {
         Block* block = &BlockPool[allocation.BlockIdx];
+        assert(!block->Free);
 
         if (block->SiblingLeft && block->SiblingLeft->Free)
         {
@@ -302,11 +304,14 @@ struct Vertex
     float Position[2];
     float UV[2];
     u8 Color[4];
+    float CoolTransparency[2];
 };
 
 struct Transformation
 {
     float Projection[4*4];
+    float InvHeight;
+    float Pad[3];
 };
 
 int SwapchainSlot = 0;
@@ -317,7 +322,7 @@ std::optional<GpuMemHeap> DataHeap;
 
 GpuMemHeap::Allocation CmdBufData[2];
 
-dk::Fence ImageUploadFence[2];
+dk::Fence CmdBufDoneFence[2];
 
 dk::Image Framebuffers[2];
 
@@ -361,6 +366,7 @@ GpuMemHeap::Allocation IndexData[2];
 GpuMemHeap::Allocation UniformBuffer;
 
 GpuMemHeap::Allocation TextureStagingBuffer[2];
+u32 TextureStagingBufferOffset;
 
 dk::Shader VertexShader, FragmentShader, FragmentShaderSmoothEdges;
 
@@ -377,7 +383,7 @@ struct Registry
         u32 result;
         if (FreeItems.size() > 0)
         {
-            result =  FreeItems[FreeItems.size() - 1];
+            result = FreeItems[FreeItems.size() - 1];
             FreeItems.pop_back();
         }
         else
@@ -395,7 +401,7 @@ struct Registry
 
     T& operator[](u32 index)
     {
-//        assert(index < Items.size());
+        assert(index < Items.size());
         return Items[index];
     }
 };
@@ -414,7 +420,6 @@ struct PendingTextureUpload
 {
     u32 TextureIdx;
     u32 X, Y, Width, Height;
-    void* Data;
     u32 DataStrideBytes;
 };
 
@@ -459,7 +464,10 @@ void TextureDelete(u32 idx)
 
 void TextureUpload(u32 index, u32 x, u32 y, u32 width, u32 height, void* data, u32 dataStride)
 {
-    TextureUploadsPending.push_back({index, x, y, width, height, data, dataStride});
+    TextureUploadsPending.push_back({index, x, y, width, height, dataStride});
+    u8* stagingBufferCpuAddr = DataHeap->CpuAddr<u8>(TextureStagingBuffer[SwapchainSlot]) + TextureStagingBufferOffset;
+    memcpy(stagingBufferCpuAddr, data, dataStride * height);
+    TextureStagingBufferOffset += dataStride * height;
 }
 
 void TextureSetSwizzle(u32 idx, DkImageSwizzle red, DkImageSwizzle green, DkImageSwizzle blue, DkImageSwizzle alpha)
@@ -481,7 +489,7 @@ u32 Atlas::GetCurrent(int width, int height)
     else
     {
         AtlasTexture& lastAtlas = Atlases[Atlases.size() - 1];
-        
+
         full = lastAtlas.PackingX + width > AtlasSize
             && lastAtlas.PackingY + lastAtlas.PackingRowHeight + height > AtlasSize;
     }
@@ -516,8 +524,9 @@ u8* Atlas::Pack(int width, int height, PackedQuad& quad)
 
     atlas.DirtyX1 = std::min(atlas.DirtyX1, quad.PackX);
     atlas.DirtyY1 = std::min(atlas.DirtyY1, quad.PackY);
-    atlas.DirtyX2 = std::clamp(atlas.DirtyX2, quad.PackX + width + 1, AtlasSize);
-    atlas.DirtyY2 = std::clamp(atlas.DirtyY2, quad.PackY + height + 1, AtlasSize);
+    // add some extra padding to avoid seems
+    atlas.DirtyX2 = std::clamp(atlas.DirtyX2, std::min(quad.PackX + width + 1, AtlasSize), AtlasSize);
+    atlas.DirtyY2 = std::clamp(atlas.DirtyY2, std::min(quad.PackY + height + 1, AtlasSize), AtlasSize);
 
     atlas.PackingX += width + 1;
     atlas.PackingRowHeight = std::max(atlas.PackingRowHeight, height);
@@ -530,6 +539,7 @@ void Atlas::IssueUpload()
     for (u32 i = 0; i < Atlases.size(); i++)
     {
         AtlasTexture& atlas = Atlases[i];
+
         int dirtyWidth = atlas.DirtyX2 - atlas.DirtyX1;
         int dirtyHeight = atlas.DirtyY2 - atlas.DirtyY1;
 
@@ -541,7 +551,8 @@ void Atlas::IssueUpload()
                 &atlas.ClientImage[atlas.DirtyX1 * BytesPerPixel + atlas.DirtyY1 * PackStride()],
                 PackStride());
 
-            atlas.DirtyX1 = atlas.DirtyY1 = atlas.DirtyX2 = atlas.DirtyY2 = 0;
+            atlas.DirtyX1 = atlas.DirtyY1 = AtlasSize;
+            atlas.DirtyX2 = atlas.DirtyY2 = 0;
         }
     }
 }
@@ -747,7 +758,7 @@ void Init()
     TextureHeap = GpuMemHeap(1024*1024*128, DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image, 128);
     ShaderCodeHeap = GpuMemHeap(1024*1024,
         DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached | DkMemBlockFlags_Code, 32);
-    DataHeap = GpuMemHeap(1024*1024*16, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached, 128);
+    DataHeap = GpuMemHeap(1024*1024*32, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached, 128);
 
     CmdBuf = dk::CmdBufMaker{Device}.create();
     for (int i = 0; i < 2; i++)
@@ -778,11 +789,11 @@ void Init()
         VertexData[i] = DataHeap->Alloc(MaxVertices * sizeof(Vertex), alignof(Vertex));
         IndexData[i] = DataHeap->Alloc(MaxIndices * sizeof(u16), alignof(u16));
 
-        TextureStagingBuffer[i] = DataHeap->Alloc(1024*1024*4, DK_MEMBLOCK_ALIGNMENT);
+        TextureStagingBuffer[i] = DataHeap->Alloc(1024*1024*8, DK_MEMBLOCK_ALIGNMENT);
 
         ImageDescriptors[i] = DataHeap->Alloc(sizeof(dk::ImageDescriptor) * 1024, DK_IMAGE_DESCRIPTOR_ALIGNMENT);
     }
-    UniformBuffer = DataHeap->Alloc(sizeof(UniformBuffer), DK_UNIFORM_BUF_ALIGNMENT);
+    UniformBuffer = DataHeap->Alloc(sizeof(Transformation), DK_UNIFORM_BUF_ALIGNMENT);
 
     {
         SamplerDescriptor = DataHeap->Alloc(sizeof(dk::SamplerDescriptor) * 4, DK_SAMPLER_DESCRIPTOR_ALIGNMENT);
@@ -849,14 +860,27 @@ void SkipTimestep()
     DoSkipTimestep = true;
 }
 
-void Rotate90Deg(u32& outX, u32& outY, u32 inX, u32 inY, int rotation)
+void Rotate90DegInv(u32& outX, u32& outY, u32 inX, u32 inY, int rotation)
 {
+    u32 tmpX = inX, tmpY = inY;
     switch (rotation)
     {
-    case 0: outX = inX; outY = inY; break;
-    case 1: outX = 1280 - inY; outY = inX; break;
-    case 2: outX = 1280 - inX; outY = 720 - inY; break;
-    case 3: outX = inY; outY = 720 - inX; break;
+    case 0: outX = tmpX; outY = tmpY; break;
+    case 1: outX = 1280 - tmpY; outY = tmpX; break;
+    case 2: outX = 1280 - tmpX; outY = 720 - tmpY; break;
+    case 3: outX = tmpY; outY = 720 - tmpX; break;
+    }
+}
+
+void Rotate90Deg(u32& outX, u32& outY, u32 inX, u32 inY, int rotation)
+{
+    u32 tmpX = inX, tmpY = inY;
+    switch (rotation)
+    {
+    case 0: outX = tmpX; outY = tmpY; break;
+    case 1: outX = tmpY; outY = 1280 - tmpX; break;
+    case 2: outX = 1280 - tmpX; outY = 720 - tmpY; break;
+    case 3: outX = 720 - tmpY; outY = tmpX; break;
     }
 }
 
@@ -882,7 +906,7 @@ void EndFrame(Color clearColor, int rotation)
     assert(ScissorStack.size() == 0);
 
     u32 fbPixelWidth, fbPixelHeight;
-    if (appletGetOperationMode() == AppletOperationMode_Docked)
+    if (appletGetOperationMode() == AppletOperationMode_Console)
     {
         fbPixelWidth = 1920;
         fbPixelHeight = 1080;
@@ -896,29 +920,29 @@ void EndFrame(Color clearColor, int rotation)
 
     FontAtlas.IssueUpload();
 
+    CmdBufDoneFence[SwapchainSlot].wait();
     CmdBuf.clear();
     CmdBuf.addMemory(DataHeap->MemBlock, CmdBufData[SwapchainSlot].Offset, CmdBufData[SwapchainSlot].Size);
 
     DkGpuAddr stagingBufferGpuAddr = DataHeap->GpuAddr(TextureStagingBuffer[SwapchainSlot]);
-    u8* stagingBufferCpuAddr = DataHeap->CpuAddr<u8>(TextureStagingBuffer[SwapchainSlot]);
     for (u32 i = 0; i < TextureUploadsPending.size(); i++)
     {
         PendingTextureUpload& upload = TextureUploadsPending[i];
         Texture& texture = Textures[upload.TextureIdx];
         dk::ImageView view{texture.Image};
-        memcpy(stagingBufferCpuAddr, upload.Data, upload.DataStrideBytes * upload.Height);
         CmdBuf.copyBufferToImage({stagingBufferGpuAddr, upload.DataStrideBytes, upload.Height}, view, {upload.X, upload.Y, 0, upload.Width, upload.Height, 1});
 
         u32 stride = upload.DataStrideBytes * upload.Height;
-        stagingBufferCpuAddr += stride;
         stagingBufferGpuAddr += stride;
     }
+    assert(stagingBufferGpuAddr - DataHeap->GpuAddr(TextureStagingBuffer[SwapchainSlot]) == TextureStagingBufferOffset);
     if (TextureUploadsPending.size() > 0)
     {
-        CmdBuf.signalFence(ImageUploadFence[SwapchainSlot]);
-        CmdBuf.waitFence(ImageUploadFence[SwapchainSlot]);
+        TextureStagingBufferOffset = 0;
+        TextureUploadsPending.clear();
+
+        CmdBuf.barrier(DkBarrier_Full, 0);
     }
-    TextureUploadsPending.clear();
 
     dk::ImageView colorTarget{Framebuffers[SwapchainSlot]};
     CmdBuf.bindRenderTargets(&colorTarget);
@@ -934,16 +958,17 @@ void EndFrame(Color clearColor, int rotation)
             .setDstColorBlendFactor(DkBlendFactor_InvSrcAlpha));
 
     CmdBuf.bindVtxBuffer(0, DataHeap->GpuAddr(VertexData[SwapchainSlot]), VertexData[SwapchainSlot].Size);
-    CmdBuf.bindVtxAttribState({
+    CmdBuf.bindVtxAttribState(
+    {
         DkVtxAttribState{0, 0, offsetof(Vertex, Position), DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0},
         DkVtxAttribState{0, 0, offsetof(Vertex, UV), DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0},
         DkVtxAttribState{0, 0, offsetof(Vertex, Color), DkVtxAttribSize_4x8, DkVtxAttribType_Unorm, 0},
+        DkVtxAttribState{0, 0, offsetof(Vertex, CoolTransparency), DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0},
     });
     CmdBuf.bindVtxBufferState({{sizeof(Vertex), 0}});
     CmdBuf.bindIdxBuffer(DkIdxFormat_Uint16, DataHeap->GpuAddr(IndexData[SwapchainSlot]));
 
     {
-        CmdBuf.bindUniformBuffer(DkStage_Vertex, 0, DataHeap->GpuAddr(UniformBuffer), UniformBuffer.Size);
         Transformation transformation;
         xm4_orthographic(transformation.Projection, -1280.f/2, 1280.f/2, 720.f/2.f, -720.f/2, -1.f, 1.f);
         float rot[16];
@@ -955,15 +980,14 @@ void EndFrame(Color clearColor, int rotation)
         xm4_rotatef(rot, -M_PI_2 * rotation, 0.f, 0.f, 1.f);
         xm4_mul(rot, trans, rot);
         xm4_mul(transformation.Projection, rot, transformation.Projection);
+        transformation.InvHeight = 1.f / screenHeight;
         CmdBuf.pushConstants(DataHeap->GpuAddr(UniformBuffer), UniformBuffer.Size, 0, sizeof(Transformation), &transformation);
+        CmdBuf.bindUniformBuffer(DkStage_Vertex, 0, DataHeap->GpuAddr(UniformBuffer), UniformBuffer.Size);
     }
 
     memcpy(DataHeap->CpuAddr<void>(VertexData[SwapchainSlot]), VertexDataClient, sizeof(Vertex)*CurClientVertex);
     memcpy(DataHeap->CpuAddr<void>(IndexData[SwapchainSlot]), IndexDataClient, sizeof(u16)*CurClientIndex);
     CurClientVertex = CurClientIndex = 0;
-
-    CmdBuf.bindSamplerDescriptorSet(DataHeap->GpuAddr(SamplerDescriptor), 4);
-    CmdBuf.bindImageDescriptorSet(DataHeap->GpuAddr(ImageDescriptors[SwapchainSlot]), 1024);
 
     assert(UsedTextures.size() <= 1024 && "use less textures at once!");
     dk::ImageDescriptor* imageDescriptors = DataHeap->CpuAddr<dk::ImageDescriptor>(ImageDescriptors[SwapchainSlot]);
@@ -976,7 +1000,11 @@ void EndFrame(Color clearColor, int rotation)
         imageDescriptors[i].initialize(view);
     }
 
+    CmdBuf.bindSamplerDescriptorSet(DataHeap->GpuAddr(SamplerDescriptor), 4);
+    CmdBuf.bindImageDescriptorSet(DataHeap->GpuAddr(ImageDescriptors[SwapchainSlot]), UsedTextures.size());
+
     u32 indexBufferOffset = 0;
+
     for (u32 i = 0; i < DrawCalls.size(); i++)
     {
         DrawCall& drawCall = DrawCalls[i];
@@ -985,8 +1013,8 @@ void EndFrame(Color clearColor, int rotation)
             // hacky
             DkScissor scissor = drawCall.Scissor;
             u32 x1, y1, x2, y2;
-            Rotate90Deg(x1, y1, scissor.x, scissor.y, rotation);
-            Rotate90Deg(x2, y2, scissor.x + scissor.width, scissor.y + scissor.height, rotation);
+            Rotate90DegInv(x1, y1, scissor.x, scissor.y, rotation);
+            Rotate90DegInv(x2, y2, scissor.x + scissor.width, scissor.y + scissor.height, rotation);
 
             scissor.x = std::min(x1, x2);
             scissor.y = std::min(y1, y2);
@@ -1003,6 +1031,8 @@ void EndFrame(Color clearColor, int rotation)
         }
         if (drawCall.Dirty & (drawCallDirty_Texture|drawCallDirty_Sampler))
         {
+            assert(Textures[drawCall.TextureIdx].ImageDescriptorIdx != -1);
+            assert(Textures[drawCall.TextureIdx].ImageDescriptorIdx < UsedTextures.size());
             CmdBuf.bindTextures(DkStage_Fragment, 0,
                 dkMakeTextureHandle(Textures[drawCall.TextureIdx].ImageDescriptorIdx, drawCall.Sampler));
         }
@@ -1016,6 +1046,8 @@ void EndFrame(Color clearColor, int rotation)
         CmdBuf.drawIndexed(DkPrimitive_Triangles, drawCall.Count, 1, indexBufferOffset, 0, 0);
         indexBufferOffset += drawCall.Count;
     }
+
+    CmdBuf.signalFence(CmdBufDoneFence[SwapchainSlot]);
 
     Queue.submitCommands(CmdBuf.finishList());
     Queue.presentImage(Swapchain, SwapchainSlot);
@@ -1078,7 +1110,8 @@ void SetSmoothEdges(bool enabled)
 void DrawRectangle(u32 texIdx, 
     Vector2f position, Vector2f size,
     Vector2f subPosition, Vector2f subSize,
-    Color tint)
+    Color tint,
+    bool coolTransparency)
 {
     Texture& texture = Textures[texIdx];
 
@@ -1091,13 +1124,30 @@ void DrawRectangle(u32 texIdx,
     u8 tintB8 = tint.B * 255;
     u8 tintA8 = tint.A * 255;
 
+    float coolTransparencyMin = coolTransparency ? 0.6f : 1.f;
+    float coolTransparencyMax = coolTransparency ? 0.9f : 1.f;
+
     Vector2f outerBounds = position + size;
 
-    VertexDataClient[CurClientVertex + 0] = {position.X, position.Y, uvMin.X, uvMin.Y, tintR8, tintG8, tintB8, tintA8};
-    VertexDataClient[CurClientVertex + 1] = {outerBounds.X, position.Y, uvMax.X, uvMin.Y, tintR8, tintG8, tintB8, tintA8};
-    VertexDataClient[CurClientVertex + 2] = {position.X, outerBounds.Y, uvMin.X, uvMax.Y, tintR8, tintG8, tintB8, tintA8};
-    VertexDataClient[CurClientVertex + 3] = {outerBounds.X, outerBounds.Y, uvMax.X, uvMax.Y, tintR8, tintG8, tintB8, tintA8};
+    assert(CurClientVertex + 4 <= MaxVertices);
+    VertexDataClient[CurClientVertex + 0] = {position.X, position.Y,
+        uvMin.X, uvMin.Y,
+        tintR8, tintG8, tintB8, tintA8,
+        coolTransparencyMin, coolTransparencyMax};
+    VertexDataClient[CurClientVertex + 1] = {outerBounds.X, position.Y,
+        uvMax.X, uvMin.Y, tintR8,
+        tintG8, tintB8, tintA8,
+        coolTransparencyMin, coolTransparencyMax};
+    VertexDataClient[CurClientVertex + 2] = {position.X, outerBounds.Y,
+        uvMin.X, uvMax.Y,
+        tintR8, tintG8, tintB8, tintA8,
+        coolTransparencyMin, coolTransparencyMax};
+    VertexDataClient[CurClientVertex + 3] = {outerBounds.X, outerBounds.Y,
+        uvMax.X, uvMax.Y,
+        tintR8, tintG8, tintB8, tintA8,
+        coolTransparencyMin, coolTransparencyMax};
 
+    assert(CurClientIndex + 6 <= MaxIndices);
     IndexDataClient[CurClientIndex + 0] = CurClientVertex;
     IndexDataClient[CurClientIndex + 1] = CurClientVertex + 2;
     IndexDataClient[CurClientIndex + 2] = CurClientVertex + 3;
@@ -1111,14 +1161,14 @@ void DrawRectangle(u32 texIdx,
     CurClientIndex += 6;
 }
 
-void DrawRectangle(Vector2f position, Vector2f size, Color tint)
+void DrawRectangle(Vector2f position, Vector2f size, Color tint, bool coolTransparency)
 {
-    DrawRectangle(WhiteTexture, position, size, Vector2f{}, Vector2f{}, tint);
+    DrawRectangle(WhiteTexture, position, size, Vector2f{}, Vector2f{}, tint, coolTransparency);
 }
 
-void DrawRectangle(u32 texIdx, Vector2f position, Vector2f size, Vector2f subPosition, Color tint)
+void DrawRectangle(u32 texIdx, Vector2f position, Vector2f size, Vector2f subPosition, Color tint, bool coolTransparency)
 {
-    DrawRectangle(texIdx, position, size, subPosition, subPosition + size, tint);
+    DrawRectangle(texIdx, position, size, subPosition, subPosition + size, tint, coolTransparency);
 }
 
 void DrawRectangle(u32 texIdx,
@@ -1131,11 +1181,13 @@ void DrawRectangle(u32 texIdx,
     Vector2f uvMin = subPosition * rcpTexSize;
     Vector2f uvMax = uvMin + subSize * rcpTexSize;
 
-    VertexDataClient[CurClientVertex + 0] = {p0.X, p0.Y, uvMin.X, uvMin.Y, 255, 255, 255, 255};
-    VertexDataClient[CurClientVertex + 1] = {p1.X, p1.Y, uvMax.X, uvMin.Y, 255, 255, 255, 255};
-    VertexDataClient[CurClientVertex + 2] = {p2.X, p2.Y, uvMin.X, uvMax.Y, 255, 255, 255, 255};
-    VertexDataClient[CurClientVertex + 3] = {p3.X, p3.Y, uvMax.X, uvMax.Y, 255, 255, 255, 255};
+    assert(CurClientVertex + 4 <= MaxVertices);
+    VertexDataClient[CurClientVertex + 0] = {p0.X, p0.Y, uvMin.X, uvMin.Y, 255, 255, 255, 255, 1.f, 1.f};
+    VertexDataClient[CurClientVertex + 1] = {p1.X, p1.Y, uvMax.X, uvMin.Y, 255, 255, 255, 255, 1.f, 1.f};
+    VertexDataClient[CurClientVertex + 2] = {p2.X, p2.Y, uvMin.X, uvMax.Y, 255, 255, 255, 255, 1.f, 1.f};
+    VertexDataClient[CurClientVertex + 3] = {p3.X, p3.Y, uvMax.X, uvMax.Y, 255, 255, 255, 255, 1.f, 1.f};
 
+    assert(CurClientIndex + 6 <= MaxIndices);
     IndexDataClient[CurClientIndex + 0] = CurClientVertex;
     IndexDataClient[CurClientIndex + 1] = CurClientVertex + 2;
     IndexDataClient[CurClientIndex + 2] = CurClientVertex + 3;
@@ -1149,6 +1201,36 @@ void DrawRectangle(u32 texIdx,
     CurClientIndex += 6;
 }
 
+Vector2f MeasureText(u32 fontIdx, float size, const char* text)
+{
+    float scale = FontGetScale(fontIdx, size);
+    float lineGap = FontGetLineGap(fontIdx, scale);
+    u32 lines = 1;
+    float lineWidth = 0.f, textWidth = 0.f;
+    const char* textPtr = text;
+    while (*textPtr)
+    {
+        u32 codepoint;
+        textPtr += decode_utf8(&codepoint, (u8*)textPtr);
+
+        if (codepoint == '\n')
+        {
+            lines++;
+            textWidth = std::max(textWidth, lineWidth);
+            lineWidth = 0.f;
+        }
+        else
+        {
+            lineWidth += FontGetGlyph(fontIdx, codepoint, scale).AdvanceWidth;
+        }
+    }
+    textWidth = std::max(textWidth, lineWidth);
+
+    float textHeight = lines * size + lineGap * (lines - 1);
+
+    return {textWidth, textHeight};
+}
+
 Vector2f DrawText(u32 fontIdx, Vector2f position, float size, Color color, int horizontalAlign, int verticalAlign, const char* text)
 {
     float scale = FontGetScale(fontIdx, size);
@@ -1159,38 +1241,17 @@ Vector2f DrawText(u32 fontIdx, Vector2f position, float size, Color color, int h
 
     if (verticalAlign != align_Left || horizontalAlign != align_Left)
     {
-        u32 lines = 1;
-        float lineWidth = 0.f, textWidth = 0.f;
-        const char* textPtr = text;
-        while (*textPtr)
-        {
-            u32 codepoint;
-            textPtr += decode_utf8(&codepoint, (u8*)textPtr);
-
-            if (codepoint == '\n')
-            {
-                lines++;
-                textWidth = std::max(textWidth, lineWidth);
-                lineWidth = 0.f;
-            }
-            else if (horizontalAlign != align_Left)
-            {
-                lineWidth += FontGetGlyph(fontIdx, codepoint, scale).AdvanceWidth;
-            }
-        }
-        textWidth = std::max(textWidth, lineWidth);
-
-        float textHeight = lines * size + lineGap * (lines - 1);
+        Vector2f textSize = MeasureText(fontIdx, size, text);
 
         if (horizontalAlign == align_Right)
-            position.X -= textWidth;
-        else
-            position.X -= textWidth / 2.f;
+            position.X -= textSize.X;
+        else if (horizontalAlign == align_Center)
+            position.X -= textSize.X / 2.f;
 
         if (verticalAlign == align_Right)
-            position.Y -= textHeight;
-        else
-            position.Y -= textHeight / 2.f;
+            position.Y -= textSize.Y;
+        else if (verticalAlign == align_Center)
+            position.Y -= textSize.Y / 2.f;
     }
 
     Vector2f offset;
@@ -1239,6 +1300,7 @@ Vector2f DrawText(u32 fontIdx, Vector2f position, float size, Color color, const
     va_list vargs;
     va_start(vargs, format);
     int requiredLength = vsnprintf(NULL, 0, format, vargs) + 1;
+    assert(requiredLength >= 1);
     char formattedText[requiredLength];
     vsnprintf(formattedText, requiredLength, format, vargs);
     va_end(vargs);
