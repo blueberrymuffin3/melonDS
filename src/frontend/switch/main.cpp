@@ -473,8 +473,11 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
             HidTouchScreenState touchPosition;
             if (FirstBotScreen != -1)
             {
-                Gfx::Vector2f botScreenSize = {ScreenPoints[1][1].X - ScreenPoints[1][0].X, ScreenPoints[1][2].Y - ScreenPoints[1][0].Y};
-                Gfx::Vector2f botScreenCenter = ScreenPoints[1][0] + botScreenSize * 0.5f;
+                Gfx::Vector2f botScreenSize =
+                {
+                    ScreenPoints[FirstBotScreen][1].X - ScreenPoints[FirstBotScreen][0].X,
+                    ScreenPoints[FirstBotScreen][2].Y - ScreenPoints[FirstBotScreen][0].Y};
+                Gfx::Vector2f botScreenCenter = ScreenPoints[FirstBotScreen][0] + botScreenSize * 0.5f;
                 if (Config::TouchscreenMode < 2)
                 {
                     HidAnalogStickState rstick = padGetStickPos(&Pad, 1);
@@ -516,20 +519,20 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
 
                             // we project the ray from the center of the bottom screen with the direction of the analog stick
                             // onto the border of the bottom screen so we can calculate the distance
-                            float topX = origin.X + direction.X * ((ScreenPoints[1][0].Y - origin.Y) / direction.Y);
-                            float bottomX = origin.X + direction.X * ((ScreenPoints[1][2].Y - origin.Y) / direction.Y);
-                            float leftY = origin.Y + direction.Y * ((ScreenPoints[1][0].X - origin.X) / direction.X);
-                            float rightY = origin.Y + direction.Y * ((ScreenPoints[1][1].X - origin.X) / direction.X);
+                            float topX = origin.X + direction.X * ((ScreenPoints[FirstBotScreen][0].Y - origin.Y) / direction.Y);
+                            float bottomX = origin.X + direction.X * ((ScreenPoints[FirstBotScreen][2].Y - origin.Y) / direction.Y);
+                            float leftY = origin.Y + direction.Y * ((ScreenPoints[FirstBotScreen][0].X - origin.X) / direction.X);
+                            float rightY = origin.Y + direction.Y * ((ScreenPoints[FirstBotScreen][1].X - origin.X) / direction.X);
 
                             Gfx::Vector2f hitPoint;
-                            if (topX >= ScreenPoints[1][0].X && topX < ScreenPoints[1][1].X)
-                                hitPoint = {topX, ScreenPoints[1][0].Y};
-                            else if (bottomX >= ScreenPoints[1][0].X && bottomX < ScreenPoints[1][1].X)
-                                hitPoint = {bottomX, ScreenPoints[1][2].Y};
-                            else if (leftY >= ScreenPoints[1][0].Y && leftY < ScreenPoints[1][2].Y)
-                                hitPoint = {ScreenPoints[1][0].X, leftY};
-                            else if (rightY >= ScreenPoints[1][0].Y && rightY < ScreenPoints[1][2].Y)
-                                hitPoint = {ScreenPoints[1][1].X, rightY};
+                            if (topX >= ScreenPoints[FirstBotScreen][0].X && topX < ScreenPoints[FirstBotScreen][1].X)
+                                hitPoint = {topX, ScreenPoints[FirstBotScreen][0].Y};
+                            else if (bottomX >= ScreenPoints[FirstBotScreen][0].X && bottomX < ScreenPoints[FirstBotScreen][1].X)
+                                hitPoint = {bottomX, ScreenPoints[FirstBotScreen][2].Y};
+                            else if (leftY >= ScreenPoints[FirstBotScreen][0].Y && leftY < ScreenPoints[FirstBotScreen][2].Y)
+                                hitPoint = {ScreenPoints[FirstBotScreen][0].X, leftY};
+                            else if (rightY >= ScreenPoints[FirstBotScreen][0].Y && rightY < ScreenPoints[FirstBotScreen][2].Y)
+                                hitPoint = {ScreenPoints[FirstBotScreen][1].X, rightY};
 
                             TouchCursorPosition = origin + rstickVec * sqrtf((hitPoint - origin).LengthSqr());
                         }
@@ -606,24 +609,24 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
                     UseRealTouchscreen = true;
                 }
 
-                if (TouchCursorPosition.X < ScreenPoints[1][0].X)
+                if (TouchCursorPosition.X < ScreenPoints[FirstBotScreen][0].X)
                 {
-                    TouchCursorPosition.X = ScreenPoints[1][0].X - 1.f;
+                    TouchCursorPosition.X = ScreenPoints[FirstBotScreen][0].X - 1.f;
                     touchUseCursor = false;
                 }
-                if (TouchCursorPosition.X >= ScreenPoints[1][1].X)
+                if (TouchCursorPosition.X >= ScreenPoints[FirstBotScreen][1].X)
                 {
-                    TouchCursorPosition.X = ScreenPoints[1][1].X + 1.f;
+                    TouchCursorPosition.X = ScreenPoints[FirstBotScreen][1].X + 1.f;
                     touchUseCursor = false;
                 }
-                if (TouchCursorPosition.Y < ScreenPoints[1][0].Y)
+                if (TouchCursorPosition.Y < ScreenPoints[FirstBotScreen][0].Y)
                 {
-                    TouchCursorPosition.Y = ScreenPoints[1][0].Y - 1.f;
+                    TouchCursorPosition.Y = ScreenPoints[FirstBotScreen][0].Y - 1.f;
                     touchUseCursor = false;
                 }
-                if (TouchCursorPosition.Y >= ScreenPoints[1][2].Y)
+                if (TouchCursorPosition.Y >= ScreenPoints[FirstBotScreen][2].Y)
                 {
-                    TouchCursorPosition.Y = ScreenPoints[1][2].Y + 1.f;
+                    TouchCursorPosition.Y = ScreenPoints[FirstBotScreen][2].Y + 1.f;
                     touchUseCursor = false;
                 }
             }
