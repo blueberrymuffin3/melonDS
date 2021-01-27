@@ -936,8 +936,13 @@ void UpdateScreenLayout()
         aspectratios[Config::ScreenAspectTop], aspectratios[Config::ScreenAspectBot]);
     float matrices[Frontend::MaxScreenTransforms][6];
     ScreensVisible = Frontend::GetScreenTransforms(matrices[0], ScreenKinds);
+    FirstBotScreen = -1;
     for (int i = 0; i < ScreensVisible; i++)
+    {
+        if (FirstBotScreen == -1 && ScreenKinds[i] == 1)
+            FirstBotScreen = i;
         DeriveScreenPoints(matrices[i], ScreenPoints[i], invTouchScale);
+    }
 }
 
 }
