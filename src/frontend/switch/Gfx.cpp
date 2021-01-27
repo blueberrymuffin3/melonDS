@@ -512,10 +512,12 @@ u8* Atlas::Pack(int width, int height, PackedQuad& quad)
     AtlasTexture& atlas = Atlases[GetCurrent(width, height)];
     quad.AtlasTexture = atlas.Texture;
 
+    const int Seam = 3;
+
     if (atlas.PackingX + width > AtlasSize)
     {
         atlas.PackingX = 0;
-        atlas.PackingY += atlas.PackingRowHeight + 1;
+        atlas.PackingY += atlas.PackingRowHeight + Seam;
         atlas.PackingRowHeight = 0;
     }
 
@@ -525,10 +527,10 @@ u8* Atlas::Pack(int width, int height, PackedQuad& quad)
     atlas.DirtyX1 = std::min(atlas.DirtyX1, quad.PackX);
     atlas.DirtyY1 = std::min(atlas.DirtyY1, quad.PackY);
     // add some extra padding to avoid seems
-    atlas.DirtyX2 = std::clamp(atlas.DirtyX2, std::min(quad.PackX + width + 1, AtlasSize), AtlasSize);
-    atlas.DirtyY2 = std::clamp(atlas.DirtyY2, std::min(quad.PackY + height + 1, AtlasSize), AtlasSize);
+    atlas.DirtyX2 = std::clamp(atlas.DirtyX2, std::min(quad.PackX + width + Seam, AtlasSize), AtlasSize);
+    atlas.DirtyY2 = std::clamp(atlas.DirtyY2, std::min(quad.PackY + height + Seam, AtlasSize), AtlasSize);
 
-    atlas.PackingX += width + 1;
+    atlas.PackingX += width + Seam;
     atlas.PackingRowHeight = std::max(atlas.PackingRowHeight, height);
 
     return atlas.ClientImage + quad.PackX * BytesPerPixel + quad.PackY * PackStride();
