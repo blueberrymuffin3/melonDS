@@ -2489,6 +2489,12 @@ void FinishWork(s32 cycles)
 
 void RunStall()
 {
+    if (FlushRequest)
+    {
+        Timestamp = NDS::ARM9Timestamp >> NDS::ARM9ClockShift;
+        NDS::ARM9Timestamp = NDS::ARM9Target;
+        return;
+    }
     CycleCount -= (NDS::ARM9Target >> NDS::ARM9ClockShift) - Timestamp;
     s32 initialCycleCount = CycleCount;
 
