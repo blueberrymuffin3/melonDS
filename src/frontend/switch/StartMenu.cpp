@@ -44,7 +44,7 @@ void Init()
         if (!f) continue;
         fclose(f);
 
-        const char* romname = strrchr(Config::LastROMPath[i], '/');
+        const char* romname = strrchr(Config::LastROMPath[i], '/') + 1;
         LastPlayedROMs.push_back({ROMMetaDatabase::QueryMeta(romname, Config::LastROMPath[i]), Config::LastROMPath[i]});
     }
 
