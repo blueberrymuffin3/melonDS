@@ -169,6 +169,8 @@ static void SigsegvHandler(int sig, siginfo_t* info, void* rawContext)
         desc.FaultPC = (u8*)context->uc_mcontext->__ss.__rip;
     #elif defined(__FreeBSD__)
         desc.FaultPC = (u8*)context->uc_mcontext.mc_rip;
+    #elif defined(__NetBSD__)
+        desc.FaultPC = (u8*)context->uc_mcontext.__gregs[_REG_RIP];
     #else
         desc.FaultPC = (u8*)context->uc_mcontext.gregs[REG_RIP];
     #endif
@@ -190,6 +192,8 @@ static void SigsegvHandler(int sig, siginfo_t* info, void* rawContext)
             context->uc_mcontext->__ss.__rip = (u64)desc.FaultPC;
         #elif defined(__FreeBSD__)
             context->uc_mcontext.mc_rip = (u64)desc.FaultPC;
+        #elif defined(__NetBSD__)
+            context->uc_mcontext.__gregs[_REG_RIP] = (u64)desc.FaultPC;
         #else
             context->uc_mcontext.gregs[REG_RIP] = (u64)desc.FaultPC;
         #endif
@@ -717,16 +721,17 @@ void Init()
 
     MemoryFile = CreateFileMapping(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, MemoryTotalSize, NULL);
 
-    MemoryBase = (u8*)VirtualAlloc(NULL, MemoryTotalSize, MEM_RESERVE, PAGE_READWRITE);
-
-    FastMem9Start = VirtualAlloc(NULL, AddrSpaceSize, MEM_RESERVE, PAGE_READWRITE);
-    FastMem7Start = VirtualAlloc(NULL, AddrSpaceSize, MEM_RESERVE, PAGE_READWRITE);
-
-    // only free them after they have all been reserved
-    // so they can't overlap
+    MemoryBase = (u8*)VirtualAlloc(NULL, AddrSpaceSize*4, MEM_RESERVE, PAGE_READWRITE);
     VirtualFree(MemoryBase, 0, MEM_RELEASE);
-    VirtualFree(FastMem9Start, 0, MEM_RELEASE);
-    VirtualFree(FastMem7Start, 0, MEM_RELEASE);
+    // this is incredible hacky
+    // but someone else is trying to go into our address space!
+    // Windows will very likely give them virtual memory starting at the same address
+    // as it is giving us now.
+    // That's why we don't use this address, but instead 4gb inwards
+    // I know this is terrible
+    FastMem9Start = MemoryBase + AddrSpaceSize;
+    FastMem7Start = MemoryBase + AddrSpaceSize*2;
+    MemoryBase = MemoryBase + AddrSpaceSize*3;
 
     MapViewOfFileEx(MemoryFile, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, MemoryTotalSize, MemoryBase);
 

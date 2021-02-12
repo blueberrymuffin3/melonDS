@@ -75,19 +75,7 @@ typedef __uint128_t u128;
 
 GPU2D_NeonSoft::GPU2D_NeonSoft(u32 num)
     : GPU2D(num)
-{
-}
-
-void GPU2D_NeonSoft::Reset()
-{
-    GPU2D::Reset();
-}
-
-
-void GPU2D_NeonSoft::SetRenderSettings(bool accel)
-{
-    // OGL renderer is unsupported in conjunction with the Neon renderer
-}
+{}
 
 inline uint8x16_t ColorBrightnessDown(uint8x16_t val, uint8x16_t factor)
 {

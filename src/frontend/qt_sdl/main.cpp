@@ -490,6 +490,19 @@ void EmuThread::run()
             // emulate
             u32 nlines = NDS::RunFrame();
 
+            FrontBufferLock.lock();
+#ifdef OGLRENDERER_ENABLED
+            if (videoRenderer == 1)
+            {
+                // this is hacky but this is the easiest way to call
+                // this function without dealling with a ton of
+                // macro mess
+                epoxy_glFinish();
+            }
+#endif
+            FrontBuffer = GPU::FrontBuffer;
+            FrontBufferLock.unlock();
+
 #ifdef MELONCAP
             MelonCap::Update();
 #endif // MELONCAP
@@ -668,13 +681,13 @@ void ScreenHandler::screenSetupLayout(int w, int h)
     numScreens = Frontend::GetScreenTransforms(screenMatrix[0], screenKind);
 }
 
-QSize ScreenHandler::screenGetMinSize()
+QSize ScreenHandler::screenGetMinSize(int factor = 1)
 {
     bool isHori = (Config::ScreenRotation == 1 || Config::ScreenRotation == 3);
     int gap = Config::ScreenGap;
 
-    int w = 256;
-    int h = 192;
+    int w = 256 * factor;
+    int h = 192 * factor;
 
     if (Config::ScreenLayout == 0) // natural
     {
@@ -816,11 +829,17 @@ void ScreenPanelNative::paintEvent(QPaintEvent* event)
     // fill background
     painter.fillRect(event->rect(), QColor::fromRgb(0, 0, 0));
 
-    int frontbuf = GPU::FrontBuffer;
-    if (!GPU::Framebuffer[frontbuf][0] || !GPU::Framebuffer[frontbuf][1]) return;
+    emuThread->FrontBufferLock.lock();
+    int frontbuf = emuThread->FrontBuffer;
+    if (!GPU::Framebuffer[frontbuf][0] || !GPU::Framebuffer[frontbuf][1])
+    {
+        emuThread->FrontBufferLock.unlock();
+        return;
+    }
 
     memcpy(screen[0].scanLine(0), GPU::Framebuffer[frontbuf][0], 256*192*4);
     memcpy(screen[1].scanLine(0), GPU::Framebuffer[frontbuf][1], 256*192*4);
+    emuThread->FrontBufferLock.unlock();
 
     painter.setRenderHint(QPainter::SmoothPixmapTransform, Config::ScreenFilter!=0);
 
@@ -980,53 +999,63 @@ void ScreenPanelGL::paintGL()
 
     glViewport(0, 0, w*factor, h*factor);
 
-    screenShader->bind();
-
-    screenShader->setUniformValue("uScreenSize", (float)w*factor, (float)h*factor);
-
-    int frontbuf = GPU::FrontBuffer;
-    glActiveTexture(GL_TEXTURE0);
-
-#ifdef OGLRENDERER_ENABLED
-    if (GPU::Renderer != 0)
+    if (emuThread)
     {
-        // hardware-accelerated render
-        GPU::GLCompositor::BindOutputTexture();
-    }
-    else
-#endif
-    {
-        // regular render
-        glBindTexture(GL_TEXTURE_2D, screenTexture);
+        screenShader->bind();
 
-        if (GPU::Framebuffer[frontbuf][0] && GPU::Framebuffer[frontbuf][1])
+        screenShader->setUniformValue("uScreenSize", (float)w*factor, (float)h*factor);
+
+        emuThread->FrontBufferLock.lock();
+        int frontbuf = emuThread->FrontBuffer;
+        glActiveTexture(GL_TEXTURE0);
+
+    #ifdef OGLRENDERER_ENABLED
+        if (GPU::Renderer != 0)
         {
-            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 192, GL_RGBA,
-                            GL_UNSIGNED_BYTE, GPU::Framebuffer[frontbuf][0]);
-            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 192+2, 256, 192, GL_RGBA,
-                            GL_UNSIGNED_BYTE, GPU::Framebuffer[frontbuf][1]);
+            // hardware-accelerated render
+            GPU::CurGLCompositor->BindOutputTexture(frontbuf);
         }
+        else
+    #endif
+        {
+            // regular render
+            glBindTexture(GL_TEXTURE_2D, screenTexture);
+
+            if (GPU::Framebuffer[frontbuf][0] && GPU::Framebuffer[frontbuf][1])
+            {
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 192, GL_RGBA,
+                                GL_UNSIGNED_BYTE, GPU::Framebuffer[frontbuf][0]);
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 192+2, 256, 192, GL_RGBA,
+                                GL_UNSIGNED_BYTE, GPU::Framebuffer[frontbuf][1]);
+            }
+        }
+
+        GLint filter = Config::ScreenFilter ? GL_LINEAR : GL_NEAREST;
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+
+        glBindBuffer(GL_ARRAY_BUFFER, screenVertexBuffer);
+        glBindVertexArray(screenVertexArray);
+
+        GLint transloc = screenShader->uniformLocation("uTransform");
+
+        for (int i = 0; i < numScreens; i++)
+        {
+            glUniformMatrix2x3fv(transloc, 1, GL_TRUE, screenMatrix[i]);
+            glDrawArrays(GL_TRIANGLES, screenKind[i] == 0 ? 0 : 2*3, 2*3);
+        }
+
+        screenShader->release();
     }
-
-    GLint filter = Config::ScreenFilter ? GL_LINEAR : GL_NEAREST;
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
-
-    glBindBuffer(GL_ARRAY_BUFFER, screenVertexBuffer);
-    glBindVertexArray(screenVertexArray);
-
-    GLint transloc = screenShader->uniformLocation("uTransform");
-
-    for (int i = 0; i < numScreens; i++)
-    {
-        glUniformMatrix2x3fv(transloc, 1, GL_TRUE, screenMatrix[i]);
-        glDrawArrays(GL_TRIANGLES, screenKind[i] == 0 ? 0 : 2*3, 2*3);
-    }
-
-    screenShader->release();
 
     OSD::Update(this);
     OSD::DrawGL(this, w*factor, h*factor);
+
+    if (emuThread)
+    {
+        glFinish();
+        emuThread->FrontBufferLock.unlock();
+    }
 }
 
 void ScreenPanelGL::resizeEvent(QResizeEvent* event)
@@ -1423,6 +1452,11 @@ void MainWindow::createScreenPanel()
     {
         panelGL = new ScreenPanelGL(this);
         panelGL->show();
+        
+        panel = panelGL;
+        panelGL->setMouseTracking(true);
+        mouseTimer = panelGL->setupMouseTimer();
+        connect(mouseTimer, &QTimer::timeout, [=] { if (Config::MouseHide) panelGL->setCursor(Qt::BlankCursor);});
 
         if (!panelGL->isValid())
             hasOGL = false;
@@ -1435,14 +1469,6 @@ void MainWindow::createScreenPanel()
 
         if (!hasOGL)
             delete panelGL;
- 
-        if (hasOGL)
-        {
-            panel = panelGL;
-            panelGL->setMouseTracking(true);
-            mouseTimer = panelGL->setupMouseTimer();
-            connect(mouseTimer, &QTimer::timeout, [=] { if (Config::MouseHide) panelGL->setCursor(Qt::BlankCursor);});
-        }
     }
 
     if (!hasOGL)
@@ -1474,8 +1500,11 @@ void MainWindow::resizeEvent(QResizeEvent* event)
     int w = event->size().width();
     int h = event->size().height();
 
-    Config::WindowWidth = w;
-    Config::WindowHeight = h;
+    if (mainWindow != nullptr && !mainWindow->isFullScreen())
+    {
+        Config::WindowWidth = w;
+        Config::WindowHeight = h;
+    }
 
     // TODO: detect when the window gets maximized!
 }
@@ -2243,43 +2272,8 @@ void MainWindow::onChangeSavestateSRAMReloc(bool checked)
 void MainWindow::onChangeScreenSize()
 {
     int factor = ((QAction*)sender())->data().toInt();
-
-    bool isHori = (Config::ScreenRotation == 1 || Config::ScreenRotation == 3);
-    int gap = Config::ScreenGap;
-
-    int w = 256*factor;
-    int h = 192*factor;
-
     QSize diff = size() - panel->size();
-
-    if (Config::ScreenLayout == 0) // natural
-    {
-        if (isHori)
-            resize(QSize(h+gap+h, w) + diff);
-        else
-            resize(QSize(w, h+gap+h) + diff);
-    }
-    else if (Config::ScreenLayout == 1) // vertical
-    {
-        if (isHori)
-            resize(QSize(h, w+gap+w) + diff);
-        else
-            resize(QSize(w, h+gap+h) + diff);
-    }
-    else if (Config::ScreenLayout == 2) // horizontal
-    {
-        if (isHori)
-            resize(QSize(h+gap+h, w) + diff);
-        else
-            resize(QSize(w+gap+w, h) + diff);
-    }
-    else // hybrid
-    {
-        if (isHori)
-            return resize(QSize(h+gap+h, 3*w +(4*gap) / 3) + diff);
-        else
-            return resize(QSize(3*w +(4*gap) / 3, h+gap+h) + diff);
-    }
+    resize(dynamic_cast<ScreenHandler*>(panel)->screenGetMinSize(factor) + diff);
 }
 
 void MainWindow::onChangeScreenRotation(QAction* act)
@@ -2507,9 +2501,15 @@ int main(int argc, char** argv)
 
     Config::Load();
 
-#define SANITIZE(var, min, max)  { if (var < min) var = min; else if (var > max) var = max; }
+#define SANITIZE(var, min, max)  { var = std::clamp(var, min, max); }
     SANITIZE(Config::ConsoleType, 0, 1);
-    SANITIZE(Config::_3DRenderer, 0, 1);
+    SANITIZE(Config::_3DRenderer,
+    0,
+    0 // Minimum, Software renderer
+    #ifdef OGLRENDERER_ENABLED
+    + 1 // OpenGL Renderer
+    #endif
+    );
     SANITIZE(Config::ScreenVSyncInterval, 1, 20);
     SANITIZE(Config::GL_ScaleFactor, 1, 16);
     SANITIZE(Config::AudioVolume, 0, 256);

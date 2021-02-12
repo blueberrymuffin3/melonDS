@@ -309,6 +309,7 @@ void FlushPendingVertices(u32 num)
 
     NumPendingVertices = num;
 }*/
+std::unique_ptr<GPU3D::Renderer3D> CurrentRenderer = {};
 
 bool Init()
 {
@@ -2573,12 +2574,12 @@ void CheckFIFODMA()
 
 void VCount144()
 {
-    if (GPU::Renderer == 0) SoftRenderer::VCount144();
+    CurrentRenderer->VCount144();
 }
 
 void RestartFrame()
 {
-    if (GPU::Renderer == 0) SoftRenderer::SetupRenderThread();
+    CurrentRenderer->RestartFrame();
 }
 
 
@@ -2673,10 +2674,7 @@ void VBlank()
 
 void VCount215()
 {
-    if (GPU::Renderer == 0) SoftRenderer::RenderFrame();
-#ifdef OGLRENDERER_ENABLED
-    else                    GLRenderer::RenderFrame();
-#endif
+    CurrentRenderer->RenderFrame();
 }
 
 void SetRenderXPos(u16 xpos)
@@ -2690,12 +2688,7 @@ u32 ScrolledLine[256];
 
 u32* GetLine(int line)
 {
-    u32* rawline = NULL;
-
-    if (GPU::Renderer == 0) rawline = SoftRenderer::GetLine(line);
-#ifdef OGLRENDERER_ENABLED
-    else                    rawline = GLRenderer::GetLine(line);
-#endif
+    u32* rawline = CurrentRenderer->GetLine(line);
 
     if (RenderXPos == 0) return rawline;
 
@@ -3178,6 +3171,10 @@ void Write32(u32 addr, u32 val)
 
     printf("unknown GPU3D write32 %08X %08X\n", addr, val);
 }
+
+Renderer3D::Renderer3D(bool Accelerated)
+: Accelerated(Accelerated)
+{ }
 
 }
 

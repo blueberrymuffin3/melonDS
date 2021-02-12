@@ -26,6 +26,7 @@
 #include <QImage>
 #include <QActionGroup>
 #include <QTimer>
+#include <QMutex>
 
 #include <QOffscreenSurface>
 #include <QOpenGLWidget>
@@ -58,6 +59,9 @@ public:
     void emuStop();
 
     bool emuIsRunning();
+
+    int FrontBuffer = 0;
+    QMutex FrontBufferLock;
 
 signals:
     void windowUpdate();
@@ -96,11 +100,10 @@ public:
     QTimer* setupMouseTimer();
     void updateMouseTimer();
     QTimer* mouseTimer;
+    QSize screenGetMinSize(int factor);
 
 protected:
     void screenSetupLayout(int w, int h);
-
-    QSize screenGetMinSize();
 
     void screenOnMousePress(QMouseEvent* event);
     void screenOnMouseRelease(QMouseEvent* event);
