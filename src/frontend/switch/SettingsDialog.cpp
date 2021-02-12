@@ -285,6 +285,7 @@ void DoGui(BoxGui::Frame& parent)
                 DoCheckbox(settingsFrame, settingsSkewer, "Boot directly (Skip bios)", bootDirectly);
                 Config::DirectBoot = bootDirectly;
             }
+            DoCombobox(settingsFrame, settingsSkewer, "Overclocking", "1020 MHz\0" "1224 MHz\0" "1581 MHz\0" "1785 MHz\0", Config::SwitchOverclock);
         }
         {
             bool jitEnable = Config::JIT_Enable;

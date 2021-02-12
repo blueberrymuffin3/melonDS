@@ -61,6 +61,64 @@ void EndSection()
 
 }
 
+namespace Overclocking
+{
+
+bool UsePCV;
+ClkrstSession Session;
+
+void ApplyOverclock(int setting)
+{
+    const int clockSpeeds[] = { 1020000000, 1224000000, 1581000000, 1785000000 };
+    printf("applying overclock %d\n", clockSpeeds[setting]);
+    if (UsePCV)
+        pcvSetClockRate(PcvModule_CpuBus, clockSpeeds[setting]);
+    else
+        clkrstSetClockRate(&Session, clockSpeeds[setting]);
+}
+
+void OnAppletHook(AppletHookType hook)
+{
+    if ((hook == AppletHookType_OnOperationMode
+        || hook == AppletHookType_OnPerformanceMode
+        || hook == AppletHookType_OnResume
+        || hook == AppletHookType_OnExitRequest)
+        && Emulation::State == Emulation::emuState_Running)
+    {
+        ApplyOverclock(Config::SwitchOverclock);
+    }
+}
+
+void Init()
+{
+    UsePCV = hosversionBefore(8, 0, 0);
+    if (UsePCV)
+    {
+        pcvInitialize();
+    }
+    else
+    {
+        clkrstInitialize();
+        clkrstOpenSession(&Session, PcvModuleId_CpuBus, 0);
+    }
+}
+
+void DeInit()
+{
+    ApplyOverclock(0);
+    if (UsePCV)
+    {
+        pcvExit();
+    }
+    else
+    {
+        clkrstCloseSession(&Session);
+        clkrstExit();
+    }
+}
+
+}
+
 namespace Emulation
 {
 
@@ -828,6 +886,8 @@ std::string GetLoadErrorStr(int error)
 
 void LoadROM(const char* file)
 {
+    Overclocking::ApplyOverclock(Config::SwitchOverclock);
+
     assert(State == emuState_Nothing);
     mutexLock(&EmuThreadLock);
     int res = Frontend::LoadROM(file, 0);
@@ -847,6 +907,8 @@ void LoadROM(const char* file)
 
 void LoadBIOS()
 {
+    Overclocking::ApplyOverclock(Config::SwitchOverclock);
+
     assert(State == emuState_Nothing);
     mutexLock(&EmuThreadLock);
     int res = Frontend::LoadBIOS();
@@ -866,6 +928,8 @@ void LoadBIOS()
 
 void SetPause(bool pause)
 {
+    Overclocking::ApplyOverclock(pause ? 0 : Config::SwitchOverclock);
+
     PlatformKeysHeld = 0;
     mutexLock(&EmuThreadLock);
     assert(State == (pause ? emuState_Running : emuState_Paused));
@@ -955,13 +1019,15 @@ extern char ExecutableDir[];
 void OnAppletHook(AppletHookType hook, void *param)
 {
     if (hook == AppletHookType_OnPerformanceMode)
-    {
         Emulation::UpdateScreenLayout();
-    }
+
+    Overclocking::OnAppletHook(hook);
 }
 
 int main(int argc, const char* argv[])
 {
+    appletLockExit();
+
     socketInitializeDefault();
     nxlinkStdio();
 
@@ -974,6 +1040,8 @@ int main(int argc, const char* argv[])
     hidInitializeTouchScreen();
 
     Gfx::Init();
+
+    Overclocking::Init();
 
     AppletHookCookie aptCookie;
     appletHook(&aptCookie, OnAppletHook, NULL);
@@ -1062,6 +1130,8 @@ int main(int argc, const char* argv[])
     StartMenu::DeInit();
     Filebrowser::DeInit();
 
+    Overclocking::DeInit();
+
     Config::Save();
 
     appletUnhook(&aptCookie);
@@ -1072,6 +1142,8 @@ int main(int argc, const char* argv[])
     romfsExit();
 
     socketExit();
+
+    appletUnlockExit();
 
     return 0;
 }
