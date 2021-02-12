@@ -1,4 +1,4 @@
-#include "GPU2D.h"
+#include "GPU2D_NeonSoft.h"
 
 #include "NDS.h"
 #include "GPU.h"

@@ -55,19 +55,26 @@ void Sleep(u64 usecs)
     svcSleepThread(usecs * 1000);
 }
 
+struct ThreadEntryData
+{
+    std::function<void()> EntryPoint;
+};
+
 void ThreadEntry(void* param)
 {
-    ((void (*)())param)();
+    ThreadEntryData* entryData = (ThreadEntryData*)param;
+    entryData->EntryPoint();
+    delete entryData;
 }
 
 #define STACK_SIZE (1024 * 1024 * 4)
 
 int nextCore = 0;
 
-Thread* Thread_Create(void (*func)())
+Thread* Thread_Create(std::function<void()> func)
 {
     ::Thread* thread = new ::Thread();
-    threadCreate(thread, ThreadEntry, (void*)func, NULL, STACK_SIZE, 0x1F, nextCore);
+    threadCreate(thread, ThreadEntry, new ThreadEntryData{func}, NULL, STACK_SIZE, 0x1F, nextCore);
     // this relies on the order of thread creation, very bad
     nextCore = 2;
     threadStart(thread);
