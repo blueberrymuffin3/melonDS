@@ -6,6 +6,9 @@
 
 #include <vector>
 #include <algorithm>
+#include <optional>
+
+#include "GpuMemHeap.h"
 
 namespace Gfx
 {
@@ -137,6 +140,14 @@ public:
     float Components[4];
 };
 
+extern dk::Device Device;
+extern dk::Queue Queue;
+extern dk::CmdBuf CmdBuf;
+extern dk::Swapchain Swapchain;
+
+extern std::optional<GpuMemHeap> TextureHeap;
+extern std::optional<GpuMemHeap> ShaderCodeHeap;
+extern std::optional<GpuMemHeap> DataHeap;
 
 void Init();
 void DeInit();
@@ -216,7 +227,7 @@ Vector2f MeasureText(u32 fontIdx, float size, const char* text);
 Vector2f DrawText(u32 fontIdx, Vector2f position, float size, Color color, int horizontalAlign, int verticalAlign, const char* text);
 Vector2f DrawText(u32 fontIdx, Vector2f position, float size, Color color, const char* format, ...);
 
-static constexpr int AtlasSize = 1024;
+static constexpr int AtlasSize = 512;
 
 struct AtlasTexture
 {
@@ -224,10 +235,6 @@ struct AtlasTexture
     u8* ClientImage;
 
     int DirtyX1 = AtlasSize, DirtyY1 = AtlasSize, DirtyX2 = 0, DirtyY2 = 0;
-
-    int PackingX = 0;
-    int PackingY = 0;
-    int PackingRowHeight = 0;
 };
 
 struct PackedQuad
@@ -243,7 +250,12 @@ struct Atlas
     DkImageSwizzle Swizzle[4] = {DkImageSwizzle_Red, DkImageSwizzle_Green, DkImageSwizzle_Blue, DkImageSwizzle_Alpha};
     std::vector<AtlasTexture> Atlases;
 
-    u32 GetCurrent(int width, int height);
+    struct Shelf
+    {
+        int Atlas, Y, Height, Used;
+    };
+    std::vector<Shelf> Shelves;
+
     u8* Pack(int width, int height, PackedQuad& quad);
 
     void IssueUpload();

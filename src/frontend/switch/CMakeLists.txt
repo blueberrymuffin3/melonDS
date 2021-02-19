@@ -18,6 +18,7 @@ SET(SOURCES_SWITCH
     StartMenu.cpp
     FaultHandler.cpp
     ErrorDialog.cpp
+    GpuMemHeap.cpp
 
     ../Util_ROM.cpp
     ../Util_Audio.cpp

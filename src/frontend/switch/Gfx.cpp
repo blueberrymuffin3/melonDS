@@ -11,7 +11,6 @@
 #include <array>
 #include <unordered_map>
 #include <algorithm>
-#include <optional>
 
 #include <stdio.h>
 
@@ -28,276 +27,6 @@ dk::Device Device;
 dk::Queue Queue;
 dk::CmdBuf CmdBuf;
 dk::Swapchain Swapchain;
-
-class GpuMemHeap
-{
-    struct Block
-    {
-        bool Free;
-        u32 Offset, Size;
-        // it would probably be smarter to make those indices because that's smaller
-        Block* SiblingLeft, *SiblingRight;
-        Block* Next, *Prev;
-    };
-
-    // this is a home made memory allocator based on TLSF (http://www.gii.upv.es/tlsf/)
-    // I hope it doesn't have to many bugs
-
-    // Free List
-    u32 FirstFreeList = 0;
-    u32* SecondFreeListBits;
-    Block** SecondFreeList;
-
-    Block* BlockPool;
-    Block* BlockPoolUnused = nullptr;
-
-    void BlockListPushFront(Block*& head, Block* block)
-    {
-        if (head)
-        {
-            assert(head->Prev == nullptr);
-            head->Prev = block;
-        }
-
-        block->Prev = nullptr;
-        block->Next = head;
-        head = block;
-    }
-
-    Block* BlockListPopFront(Block*& head)
-    {
-        Block* result = head;
-        assert(result && "popping from empty block list");
-
-        head = result->Next;
-        if (head)
-            head->Prev = nullptr;
-
-        return result;
-    }
-
-    void BlockListRemove(Block*& head, Block* block)
-    {
-        assert((head == block) == !block->Prev);
-        if (!block->Prev)
-            head = block->Next;
-
-        if (block->Prev)
-            block->Prev->Next = block->Next;
-        if (block->Next)
-            block->Next->Prev = block->Prev;
-    }
-
-    void MapSizeToSecondLevel(u32 size, u32& fl, u32& sl)
-    {
-        assert(size >= 32);
-        fl = 31 - __builtin_clz(size);
-        sl = (size - (1 << fl)) >> (fl - 5);
-    }
-
-    void MarkFree(Block* block)
-    {
-        assert(!block->Free);
-        block->Free = true;
-        u32 fl, sl;
-        MapSizeToSecondLevel(block->Size, fl, sl);
-
-        BlockListPushFront(SecondFreeList[(fl - 5) * 32 + sl], block);
-
-        FirstFreeList |= 1 << (fl - 5);
-        SecondFreeListBits[fl - 5] |= 1 << sl;
-    }
-
-    void UnmarkFree(Block* block)
-    {
-        assert(block->Free);
-        block->Free = false;
-        u32 fl, sl;
-        MapSizeToSecondLevel(block->Size, fl, sl);
-
-        BlockListRemove(SecondFreeList[(fl - 5) * 32 + sl], block);
-
-        if (!SecondFreeList[(fl - 5) * 32 + sl])
-        {
-            SecondFreeListBits[fl - 5] &= ~(1 << sl);
-
-            if (SecondFreeListBits[fl - 5] == 0)
-                FirstFreeList &= ~(1 << (fl - 5));
-        }
-    }
-
-    // makes a new block to the right and returns it
-    Block* SplitBlockRight(Block* block, u32 offset)
-    {
-        assert(!block->Free);
-        assert(offset < block->Size);
-        Block* newBlock = BlockListPopFront(BlockPoolUnused);
-
-        newBlock->Offset = block->Offset + offset;
-        newBlock->Size = block->Size - offset;
-        newBlock->SiblingLeft = block;
-        newBlock->SiblingRight = block->SiblingRight;
-        newBlock->Free = false;
-        if (newBlock->SiblingRight)
-        {
-            assert(newBlock->SiblingRight->SiblingLeft == block);
-            newBlock->SiblingRight->SiblingLeft = newBlock;
-        }
-
-        block->Size -= newBlock->Size;
-        block->SiblingRight = newBlock;
-
-        return newBlock;
-    }
-
-    Block* MergeBlocksLeft(Block* block, Block* other)
-    {
-        assert(block->SiblingRight == other);
-        assert(other->SiblingLeft == block);
-        assert(!block->Free);
-        assert(!other->Free);
-        assert(block->Offset + block->Size == other->Offset);
-        block->Size += other->Size;
-        block->SiblingRight = other->SiblingRight;
-        if (block->SiblingRight)
-        {
-            assert(block->SiblingRight->SiblingLeft == other);
-            block->SiblingRight->SiblingLeft = block;
-        }
-
-        BlockListPushFront(BlockPoolUnused, other);
-
-        return block;
-    }
-public:
-    dk::MemBlock MemBlock;
-
-    struct Allocation
-    {
-        u32 BlockIdx;
-        u32 Offset, Size;
-    };
-
-    GpuMemHeap(u32 size, u32 flags, u32 blockPoolSize)
-    {
-        assert((size & (DK_MEMBLOCK_ALIGNMENT - 1)) == 0 && "block size not properly aligned");
-        u32 sizeLog2 = 31 - __builtin_clz(size);
-        if (((u32)1 << sizeLog2) > size)
-            sizeLog2++; // round up to the next power of two
-        assert(sizeLog2 >= 5);
-
-        u32 rows = sizeLog2 - 4; // remove rows below 32 bytes and round up to next
-
-        SecondFreeListBits = new u32[rows];
-        memset(SecondFreeListBits, 0, rows*4);
-        SecondFreeList = new Block*[rows * 32];
-        memset(SecondFreeList, 0, rows*32*8);
-
-        BlockPool = new Block[blockPoolSize];
-        memset(BlockPool, 0, sizeof(Block)*blockPoolSize);
-        for (u32 i = 0; i < blockPoolSize; i++)
-            BlockListPushFront(BlockPoolUnused, &BlockPool[i]);
-
-        // insert heap into the free list
-        Block* heap = BlockListPopFront(BlockPoolUnused);
-        heap->Offset = 0;
-        heap->Size = size - (flags & DkMemBlockFlags_Code ? DK_SHADER_CODE_UNUSABLE_SIZE : 0);
-        heap->SiblingLeft = nullptr;
-        heap->SiblingRight = nullptr;
-        heap->Free = false;
-        MarkFree(heap);
-
-        MemBlock = dk::MemBlockMaker{Device, size}
-            .setFlags(flags).create();
-    }
-
-    void Destroy()
-    {
-        MemBlock.destroy();
-
-        delete[] BlockPool;
-        delete[] SecondFreeList;
-        delete[] SecondFreeListBits;
-    }
-
-    Allocation Alloc(u32 size, u32 align)
-    {
-        assert(size > 0);
-        assert((align & (align - 1)) == 0 && "alignment must be a power of two");
-        // minimum alignment (and thus size) is 32 bytes
-        align = std::max((u32)32, align);
-        size = (size + align - 1) & ~(align - 1);
-
-        u32 fl, sl;
-        MapSizeToSecondLevel(size + (align > 32 ? align : 0), fl, sl);
-
-        u32 secondFreeListBits = SecondFreeListBits[fl - 5] & (0xFFFFFFFF << (sl + 1));
-
-        if (sl == 31 || secondFreeListBits == 0)
-        {
-            u32 firstFreeListBits = FirstFreeList & (0xFFFFFFFF << (fl - 5 + 1));
-            assert(firstFreeListBits && "out of memory :(");
-
-            fl = __builtin_ctz(firstFreeListBits) + 5;
-            secondFreeListBits = SecondFreeListBits[fl - 5];
-            assert(secondFreeListBits);
-            sl = __builtin_ctz(secondFreeListBits);
-        }
-        assert(secondFreeListBits && "out of memory :(");
-
-        sl = __builtin_ctz(secondFreeListBits);
-
-        Block* block = SecondFreeList[(fl - 5) * 32 + sl];
-        UnmarkFree(block);
-
-        // align within the block
-        if ((block->Offset & (align - 1)) > 0)
-        {
-            assert(align > 32);
-            Block* newBlock = SplitBlockRight(block, ((block->Offset + align - 1) & ~(align - 1)) - block->Offset);
-            MarkFree(block);
-            block = newBlock;
-        }
-        // put remaining data back
-        if (block->Size > size)
-        {
-            MarkFree(SplitBlockRight(block, size));
-        }
-
-        assert((block->Offset & (align - 1)) == 0);
-        return {(u32)(block - BlockPool), block->Offset, block->Size};
-    }
-
-    void Free(Allocation allocation)
-    {
-        Block* block = &BlockPool[allocation.BlockIdx];
-        assert(!block->Free);
-
-        if (block->SiblingLeft && block->SiblingLeft->Free)
-        {
-            UnmarkFree(block->SiblingLeft);
-            block = MergeBlocksLeft(block->SiblingLeft, block);
-        }
-        if (block->SiblingRight && block->SiblingRight->Free)
-        {
-            UnmarkFree(block->SiblingRight);
-            block = MergeBlocksLeft(block, block->SiblingRight);
-        }
-
-        MarkFree(block);
-    }
-
-    DkGpuAddr GpuAddr(Allocation allocation)
-    {
-        return MemBlock.getGpuAddr() + allocation.Offset;
-    }
-
-    template <typename T>
-    T* CpuAddr(Allocation allocation)
-    {
-        return (T*)((u8*)MemBlock.getCpuAddr() + allocation.Offset);
-    }
-};
 
 struct Vertex
 {
@@ -479,61 +208,83 @@ void TextureSetSwizzle(u32 idx, DkImageSwizzle red, DkImageSwizzle green, DkImag
     texture.ComponentSwizzle[3] = alpha;
 }
 
-u32 Atlas::GetCurrent(int width, int height)
-{
-    bool full;
-    if (Atlases.size() == 0)
-    {
-        full = true;
-    }
-    else
-    {
-        AtlasTexture& lastAtlas = Atlases[Atlases.size() - 1];
-
-        full = lastAtlas.PackingX + width > AtlasSize
-            && lastAtlas.PackingY + lastAtlas.PackingRowHeight + height > AtlasSize;
-    }
-
-    if (full)
-    {
-        AtlasTexture newAtlas;
-        newAtlas.Texture = TextureCreate(AtlasSize, AtlasSize, TexFmt);
-        TextureSetSwizzle(newAtlas.Texture, Swizzle[0], Swizzle[1], Swizzle[2], Swizzle[3]);
-        newAtlas.ClientImage = new u8[AtlasSize * AtlasSize * BytesPerPixel];
-        memset(newAtlas.ClientImage, 0, AtlasSize * AtlasSize * BytesPerPixel);
-
-        Atlases.push_back(newAtlas);
-    }
-    return Atlases.size() - 1;
-}
+const int MaximumWaste = 4;
 
 u8* Atlas::Pack(int width, int height, PackedQuad& quad)
 {
-    AtlasTexture& atlas = Atlases[GetCurrent(width, height)];
-    quad.AtlasTexture = atlas.Texture;
-
+    // this packing algorithm isn't the best one in the world
+    // but it works well enough for fonts because they're
+    // relatively homogenous in their size
+    // and it's definitely better than the old one
     const int Seam = 3;
 
-    if (atlas.PackingX + width > AtlasSize)
+    int paddedWidth = width + Seam;
+    int paddedHeight = height + Seam;
+
+    int minDiff = INT32_MAX;
+    int minIdx = -1;
+    for (u32 i = 0; i < Shelves.size(); i++)
     {
-        atlas.PackingX = 0;
-        atlas.PackingY += atlas.PackingRowHeight + Seam;
-        atlas.PackingRowHeight = 0;
+        int heightDiff = Shelves[i].Height - paddedHeight;
+        if (AtlasSize - Shelves[i].Used >= paddedWidth
+            && heightDiff >= 0 
+            && heightDiff < minDiff)
+        {
+            minDiff = heightDiff;
+            minIdx = i;
+        }
     }
 
-    quad.PackX = atlas.PackingX;
-    quad.PackY = atlas.PackingY;
+    Shelf* shelf;
+    if (minIdx == -1 || minDiff > MaximumWaste)
+    {
+        bool useNewAtlas = Shelves.size() == 0;
 
-    atlas.DirtyX1 = std::min(atlas.DirtyX1, quad.PackX);
-    atlas.DirtyY1 = std::min(atlas.DirtyY1, quad.PackY);
+        if (!useNewAtlas)
+        {
+            shelf = &Shelves[Shelves.size() - 1];
+            useNewAtlas = shelf->Y + shelf->Height + paddedHeight > AtlasSize;
+        }
+
+        if (useNewAtlas)
+        {
+            AtlasTexture newAtlas;
+            newAtlas.Texture = TextureCreate(AtlasSize, AtlasSize, TexFmt);
+            TextureSetSwizzle(newAtlas.Texture, Swizzle[0], Swizzle[1], Swizzle[2], Swizzle[3]);
+            newAtlas.ClientImage = new u8[AtlasSize * AtlasSize * BytesPerPixel];
+            memset(newAtlas.ClientImage, 0, AtlasSize * AtlasSize * BytesPerPixel);
+
+            Atlases.push_back(newAtlas);
+            Shelves.push_back({(int)Atlases.size() - 1, 0, paddedHeight, 0});
+
+            shelf = &Shelves[Shelves.size() - 1];
+        }
+        else
+        {
+            Shelves.push_back({shelf->Atlas, shelf->Y+shelf->Height, paddedHeight, 0});
+            shelf = &Shelves[Shelves.size() - 1];
+        }
+    }
+    else
+    {
+        shelf = &Shelves[minIdx];
+    }
+    AtlasTexture* atlas = &Atlases[shelf->Atlas];
+
+    quad.AtlasTexture = atlas->Texture;
+
+    quad.PackX = shelf->Used;
+    quad.PackY = shelf->Y;
+
+    atlas->DirtyX1 = std::min(atlas->DirtyX1, quad.PackX);
+    atlas->DirtyY1 = std::min(atlas->DirtyY1, quad.PackY);
     // add some extra padding to avoid seems
-    atlas.DirtyX2 = std::clamp(atlas.DirtyX2, std::min(quad.PackX + width + Seam, AtlasSize), AtlasSize);
-    atlas.DirtyY2 = std::clamp(atlas.DirtyY2, std::min(quad.PackY + height + Seam, AtlasSize), AtlasSize);
+    atlas->DirtyX2 = std::clamp(atlas->DirtyX2, std::min(quad.PackX + paddedWidth, AtlasSize), AtlasSize);
+    atlas->DirtyY2 = std::clamp(atlas->DirtyY2, std::min(quad.PackY + paddedHeight, AtlasSize), AtlasSize);
 
-    atlas.PackingX += width + Seam;
-    atlas.PackingRowHeight = std::max(atlas.PackingRowHeight, height);
+    shelf->Used += width + Seam;
 
-    return atlas.ClientImage + quad.PackX * BytesPerPixel + quad.PackY * PackStride();
+    return atlas->ClientImage + quad.PackX * BytesPerPixel + quad.PackY * PackStride();
 }
 
 void Atlas::IssueUpload()
@@ -757,10 +508,10 @@ void Init()
     Device = dk::DeviceMaker{}.create();
     Queue = dk::QueueMaker{Device}.setFlags(DkQueueFlags_Graphics).create();
 
-    TextureHeap = GpuMemHeap(1024*1024*128, DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image, 128);
-    ShaderCodeHeap = GpuMemHeap(1024*1024,
+    TextureHeap.emplace(Device, 1024*1024*64, DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image, 128);
+    ShaderCodeHeap.emplace(Device, 1024*1024,
         DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached | DkMemBlockFlags_Code, 32);
-    DataHeap = GpuMemHeap(1024*1024*32, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached, 128);
+    DataHeap.emplace(Device, 1024*1024*32, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached, 128);
 
     CmdBuf = dk::CmdBufMaker{Device}.create();
     for (int i = 0; i < 2; i++)
@@ -846,9 +597,9 @@ void DeInit()
     CmdBuf.destroy();
     Queue.destroy();
 
-    TextureHeap->Destroy();
-    ShaderCodeHeap->Destroy();
-    DataHeap->Destroy();
+    TextureHeap.reset();
+    ShaderCodeHeap.reset();
+    DataHeap.reset();
 
     Device.destroy();
 }
