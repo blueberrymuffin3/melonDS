@@ -20,6 +20,8 @@
 
 #include "mm_vec/mm_vec.h"
 
+#include "CmdMemRing.h"
+
 namespace Gfx
 {
 
@@ -49,9 +51,7 @@ std::optional<GpuMemHeap> TextureHeap;
 std::optional<GpuMemHeap> ShaderCodeHeap;
 std::optional<GpuMemHeap> DataHeap;
 
-GpuMemHeap::Allocation CmdBufData[2];
-
-dk::Fence CmdBufDoneFence[2];
+std::optional<CmdMemRing<2>> CmdMem;
 
 dk::Image Framebuffers[2];
 
@@ -193,6 +193,8 @@ void TextureDelete(u32 idx)
 
 void TextureUpload(u32 index, u32 x, u32 y, u32 width, u32 height, void* data, u32 dataStride)
 {
+    assert(TextureStagingBufferOffset + dataStride * height <= TextureStagingBuffer[0].Size);
+
     TextureUploadsPending.push_back({index, x, y, width, height, dataStride});
     u8* stagingBufferCpuAddr = DataHeap->CpuAddr<u8>(TextureStagingBuffer[SwapchainSlot]) + TextureStagingBufferOffset;
     memcpy(stagingBufferCpuAddr, data, dataStride * height);
@@ -514,8 +516,7 @@ void Init()
     DataHeap.emplace(Device, 1024*1024*32, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached, 128);
 
     CmdBuf = dk::CmdBufMaker{Device}.create();
-    for (int i = 0; i < 2; i++)
-        CmdBufData[i] = DataHeap->Alloc(0x10000*2, 0x10000);
+    CmdMem.emplace(*DataHeap, 0x10000*2);
 
     dk::ImageLayout fbLayout;
     dk::ImageLayoutMaker{Device}
@@ -597,6 +598,8 @@ void DeInit()
     CmdBuf.destroy();
     Queue.destroy();
 
+    CmdMem.reset();
+
     TextureHeap.reset();
     ShaderCodeHeap.reset();
     DataHeap.reset();
@@ -639,7 +642,6 @@ void Rotate90Deg(u32& outX, u32& outY, u32 inX, u32 inY, int rotation)
 
 void StartFrame()
 {
-    // make sure we can access the double buffered vertex and index buffers
     SwapchainSlot = Queue.acquireImage(Swapchain);
 
     AnimationTimestamp = armTicksToNs(armGetSystemTick()) * 0.000000001;
@@ -673,9 +675,7 @@ void EndFrame(Color clearColor, int rotation)
 
     FontAtlas.IssueUpload();
 
-    CmdBufDoneFence[SwapchainSlot].wait();
-    CmdBuf.clear();
-    CmdBuf.addMemory(DataHeap->MemBlock, CmdBufData[SwapchainSlot].Offset, CmdBufData[SwapchainSlot].Size);
+    CmdMem->Begin(CmdBuf);
 
     DkGpuAddr stagingBufferGpuAddr = DataHeap->GpuAddr(TextureStagingBuffer[SwapchainSlot]);
     for (u32 i = 0; i < TextureUploadsPending.size(); i++)
@@ -800,9 +800,7 @@ void EndFrame(Color clearColor, int rotation)
         indexBufferOffset += drawCall.Count;
     }
 
-    CmdBuf.signalFence(CmdBufDoneFence[SwapchainSlot]);
-
-    Queue.submitCommands(CmdBuf.finishList());
+    Queue.submitCommands(CmdMem->End(CmdBuf));
     Queue.presentImage(Swapchain, SwapchainSlot);
 
     DrawCalls.clear();
