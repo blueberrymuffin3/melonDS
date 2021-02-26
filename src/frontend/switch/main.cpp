@@ -122,37 +122,28 @@ void DeInit()
 namespace Emulation
 {
 
-bool FeedMicNoise;
-
-u32 KeyMask = 0xFFFFFFFF;
 u64 PlatformKeysHeld;
 
 u32 FramebufferTextures[2];
 bool NewFrameReady = false;
 u32 CurrentFrontBuffer;
 
+const int FrametimeHistogramLen = 120;
 int FrametimeHistogramNextValue;
-float FrametimeHistogram[120];
+float FrametimeHistogram[FrametimeHistogramLen];
 
 int ScreensVisible, FirstBotScreen;
 Gfx::Vector2f ScreenPoints[Frontend::MaxScreenTransforms][4];
 int ScreenKinds[Frontend::MaxScreenTransforms];
 
-Mutex EmuThreadLock;
-CondVar FrameStartCond;
-Thread EmuThread, AudioThread;
+Thread AudioThread;
 
 int State;
-std::atomic<int> StateEmuThread;
 std::atomic<int> StateAtomic;
 
 const int AudioFrameSize = 768 * 2 * sizeof(s16);
 AudioDriver AudioDrv;
 void* AudMemPool = NULL;
-
-bool LimitFramerate;
-
-bool LidClosed;
 
 bool TouchHeld;
 Gfx::Vector2f TouchCursorVelocity;
@@ -174,6 +165,8 @@ float GyroCalibrationRight[3];
 float GyroCalibrationForward[3];
 
 bool UseRealTouchscreen;
+
+bool LidClosed;
 
 void RecalibrateGyro(HidSixAxisSensorState& values)
 {
@@ -251,111 +244,12 @@ void AudioOutput(void *args)
     }
 }
 
-void EmuThreadFunc(void*)
-{    
+void Init()
+{
     NDS::Init();
-
     GPU::InitRenderer(0);
     GPU::RenderSettings settings{true, 1, false};
     GPU::SetRenderSettings(0, settings);
-
-    bool missedFrame = false;
-
-    u32 state = StateAtomic;
-    while (state != emuState_Quit)
-    {
-        StateEmuThread = state;
-
-        if (state == emuState_Running)
-        {
-            mutexLock(&EmuThreadLock);
-            if (!missedFrame && LimitFramerate)
-            {
-                condvarWait(&FrameStartCond, &EmuThreadLock);
-                state = StateAtomic;
-                if (state != emuState_Running)
-                {
-                    mutexUnlock(&EmuThreadLock);
-                    continue;
-                }
-            }
-            if (FeedMicNoise)
-                Frontend::Mic_FeedNoise();
-            else
-                Frontend::Mic_FeedSilence();
-            NDS::SetKeyMask(KeyMask);
-            if (TouchDown)
-                NDS::TouchScreen((u16)TouchFinalPositionX, (u16)TouchFinalPositionY);
-            else
-                NDS::ReleaseScreen();
-            if (LidClosed != NDS::IsLidClosed())
-                NDS::SetLidClosed(LidClosed);
-            mutexUnlock(&EmuThreadLock);
-
-            u64 frameStart = armGetSystemTick();
-
-            NDS::RunFrame();
-
-            u64 frameLength = armTicksToNs(armGetSystemTick() - frameStart);
-            if (frameLength < 1000)
-            {
-                svcSleepThread(1000 * 1000);
-                frameLength = 1000 * 1000;
-            }
-            missedFrame = frameLength > 16 * 1000 * 1000;
-
-            mutexLock(&EmuThreadLock);
-            FrametimeHistogram[FrametimeHistogramNextValue] = (float)frameLength * 0.000001f;
-            FrametimeHistogramNextValue++;
-            if (FrametimeHistogramNextValue >= 120)
-                FrametimeHistogramNextValue = 0;
-
-            {
-                MainScreenPosition[2] = MainScreenPosition[1];
-                MainScreenPosition[1] = MainScreenPosition[0];
-                MainScreenPosition[0] = NDS::PowerControl9 >> 15;
-                int guess;
-                if (MainScreenPosition[0] == MainScreenPosition[2] &&
-                    MainScreenPosition[0] != MainScreenPosition[1])
-                {
-                    // constant flickering, likely displaying 3D on both screens
-                    // TODO: when both screens are used for 2D only...???
-                    guess = 0;
-                }
-                else
-                {
-                    if (MainScreenPosition[0] == 1)
-                        guess = 1;
-                    else
-                        guess = 2;
-                }
-                AutoScreenSizing = guess;
-            }
-
-            CurrentFrontBuffer = GPU::FrontBuffer;
-            NewFrameReady = true;
-            mutexUnlock(&EmuThreadLock);
-        }
-        else
-        {
-            svcSleepThread(1000 * 1000);
-            missedFrame = false;
-        }
-
-        state = StateAtomic;
-    }
-
-    GPU::DeInitRenderer();
-    NDS::DeInit();
-}
-
-void Init()
-{
-    mutexInit(&EmuThreadLock);
-    condvarInit(&FrameStartCond);
-
-    threadCreate(&EmuThread, EmuThreadFunc, NULL, NULL, 1024*1024*8, 0x20, 1);
-    threadStart(&EmuThread);
 
     u32 zeroData[256*192] = {0};
     for (u32 i = 0; i < 2; i++)
@@ -437,8 +331,8 @@ void DeInit()
     threadWaitForExit(&AudioThread);
     threadClose(&AudioThread);
 
-    threadWaitForExit(&EmuThread);
-    threadClose(&EmuThread);
+    GPU::DeInitRenderer();
+    NDS::DeInit();
 
     audrvClose(&AudioDrv);
     audrenExit();
@@ -471,9 +365,6 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
 
     if (State == emuState_Running)
     {
-        // delay until the end of the frame
-        svcSleepThread(1000 * 1000 * 10);
-
         padUpdate(&Pad);
         keysDown = padGetButtonsDown(&Pad);
         keysUp = padGetButtonsUp(&Pad);
@@ -693,8 +584,7 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
             for (int i = 0; i < 12; i++)
                 keyMask &= ~(!!(PlatformKeysHeld & rotatedKeyMappings[i]) << i);
 
-            mutexLock(&EmuThreadLock);
-            FeedMicNoise = PlatformKeysHeld & HidNpadButton_StickL;
+            bool feedMicNoise = PlatformKeysHeld & HidNpadButton_StickL;
             if (keysDown & HidNpadButton_StickR)
             {
                 switch (Config::ScreenSizing)
@@ -738,37 +628,64 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
 
                     TouchFinalPositionX = (int)(TouchCursorPosition.X * TouchScale);
                     TouchFinalPositionY = (int)(TouchCursorPosition.Y * TouchScale);
-                    Frontend::GetTouchCoords(TouchFinalPositionX, TouchFinalPositionY);
-                    TouchDown = TouchHeld
-                        && TouchFinalPositionX >= 0 && TouchFinalPositionX < 256
-                        && TouchFinalPositionY >= 0 && TouchFinalPositionY < 192;
+                    bool inside = Frontend::GetTouchCoords(TouchFinalPositionX, TouchFinalPositionY);
+                    TouchDown = TouchHeld && inside;
                 }
                 else
                 {
                     Gfx::Rotate90Deg(touchPosition.touches[0].x, touchPosition.touches[0].y, touchPosition.touches[0].x, touchPosition.touches[0].y, Config::GlobalRotation);
                     TouchFinalPositionX = (int)(touchPosition.touches[0].x * TouchScale);
                     TouchFinalPositionY = (int)(touchPosition.touches[0].y * TouchScale);
-                    Frontend::GetTouchCoords(TouchFinalPositionX, TouchFinalPositionY);
-                    TouchDown =
-                        touchPosition.count > 0
-                        && TouchFinalPositionX >= 0 && TouchFinalPositionX < 256
-                        && TouchFinalPositionY >= 0 && TouchFinalPositionY < 192;
+                    bool inside = Frontend::GetTouchCoords(TouchFinalPositionX, TouchFinalPositionY);
+                    TouchDown = touchPosition.count > 0 && inside;
                 }
             }
 
-            LimitFramerate = Config::LimitFramerate;
+            if (feedMicNoise)
+                Frontend::Mic_FeedNoise();
+            else
+                Frontend::Mic_FeedSilence();
+            NDS::SetKeyMask(keyMask);
+            if (TouchDown)
+                NDS::TouchScreen((u16)TouchFinalPositionX, (u16)TouchFinalPositionY);
+            else
+                NDS::ReleaseScreen();
+            if (LidClosed != NDS::IsLidClosed())
+                NDS::SetLidClosed(LidClosed);
 
-            KeyMask = keyMask;
+            u64 frameStart = armGetSystemTick();
+            NDS::RunFrame();
+            u64 frameLength = armTicksToNs(armGetSystemTick() - frameStart);
 
-            if (NewFrameReady)
+            for (int i = 0; i < 2; i++)
+                Gfx::TextureUpload(FramebufferTextures[i], 0, 0, 256, 192, GPU::Framebuffer[GPU::FrontBuffer][i], 256*4);
+
+            FrametimeHistogram[FrametimeHistogramNextValue] = (float)frameLength * 0.000001f;
+            FrametimeHistogramNextValue++;
+            if (FrametimeHistogramNextValue >= FrametimeHistogramLen)
+                FrametimeHistogramNextValue = 0;
+
             {
-                NewFrameReady = false;
-                for (u32 i = 0; i < 2; i++)
-                    Gfx::TextureUpload(FramebufferTextures[i], 0, 0, 256, 192, GPU::Framebuffer[CurrentFrontBuffer][i], 256*4);
+                MainScreenPosition[2] = MainScreenPosition[1];
+                MainScreenPosition[1] = MainScreenPosition[0];
+                MainScreenPosition[0] = NDS::PowerControl9 >> 15;
+                int guess;
+                if (MainScreenPosition[0] == MainScreenPosition[2] &&
+                    MainScreenPosition[0] != MainScreenPosition[1])
+                {
+                    // constant flickering, likely displaying 3D on both screens
+                    // TODO: when both screens are used for 2D only...???
+                    guess = 0;
+                }
+                else
+                {
+                    if (MainScreenPosition[0] == 1)
+                        guess = 1;
+                    else
+                        guess = 2;
+                }
+                AutoScreenSizing = guess;
             }
-            mutexUnlock(&EmuThreadLock);
-            // request a new frame
-            condvarWakeOne(&FrameStartCond);
         }
     }
 
@@ -807,10 +724,9 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
     if (Config::ShowPerformanceMetrics && State == emuState_Running)
     {
         // locking the mutex again, eh not so great
-        mutexLock(&EmuThreadLock);
-        Gfx::DrawRectangle({0.f, 0.f}, {4*120.f, TextLineHeight * 4.f}, DarkColorTransparent);
+        Gfx::DrawRectangle({0.f, 0.f}, {4.f*FrametimeHistogramLen, TextLineHeight * 4.f}, DarkColorTransparent);
         float sum = 0.f, max = 0.f, min = infinityf();
-        for (int i = 0; i < 120; i++)
+        for (int i = 0; i < FrametimeHistogramLen; i++)
         {
             sum += FrametimeHistogram[i];
             max = std::max(max, FrametimeHistogram[i]);
@@ -818,18 +734,17 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
         }
 
         int idx = FrametimeHistogramNextValue;
-        for (int i = 0; i < 120; i++)
+        for (int i = 0; i < FrametimeHistogramLen; i++)
         {
             float frametime = FrametimeHistogram[idx];
             Gfx::DrawRectangle({i * 3.f, TextLineHeight}, {3.f, frametime / max * TextLineHeight}, WidgetColorBright);
             idx++;
-            if (idx == 120)
+            if (idx == FrametimeHistogramLen)
                 idx = 0;
         }
 
-        float averageFrametime = sum / 120.f;
+        float averageFrametime = sum / (float)FrametimeHistogramLen;
         Gfx::DrawText(Gfx::SystemFontStandard, {0.f, 0.f}, TextLineHeight, WidgetColorBright, "avg: %.2fms min %.2fms max: %.2fms\n\nprof: %.2fms", averageFrametime, min, max, Profiler::Sum);
-        mutexUnlock(&EmuThreadLock);
     }
 
     Profiler::Clear();
@@ -889,19 +804,16 @@ void LoadROM(const char* file)
     Overclocking::ApplyOverclock(Config::SwitchOverclock);
 
     assert(State == emuState_Nothing);
-    mutexLock(&EmuThreadLock);
     int res = Frontend::LoadROM(file, 0);
     if (res != Frontend::Load_OK)
     {
         ErrorDialog::Open(GetLoadErrorStr(res));
-        mutexUnlock(&EmuThreadLock);
     }
     else
     {
         State = emuState_Running;
         StateAtomic = State;
         CurrentUiScreen = uiScreen_Start;
-        mutexUnlock(&EmuThreadLock);
     }
 }
 
@@ -910,19 +822,16 @@ void LoadBIOS()
     Overclocking::ApplyOverclock(Config::SwitchOverclock);
 
     assert(State == emuState_Nothing);
-    mutexLock(&EmuThreadLock);
     int res = Frontend::LoadBIOS();
     if (res != Frontend::Load_OK)
     {
         ErrorDialog::Open(GetLoadErrorStr(res));
-        mutexUnlock(&EmuThreadLock);
     }
     else
     {
         State = emuState_Running;
         StateAtomic = State;
         CurrentUiScreen = uiScreen_Start;
-        mutexUnlock(&EmuThreadLock);        
     }
 }
 
@@ -931,15 +840,9 @@ void SetPause(bool pause)
     Overclocking::ApplyOverclock(pause ? 0 : Config::SwitchOverclock);
 
     PlatformKeysHeld = 0;
-    mutexLock(&EmuThreadLock);
     assert(State == (pause ? emuState_Running : emuState_Paused));
     State = pause ? emuState_Paused : emuState_Running;
     StateAtomic = State;
-    mutexUnlock(&EmuThreadLock);
-    if (pause)
-        condvarWakeOne(&FrameStartCond);
-    u64 time = armGetSystemTick();
-    while (StateAtomic != StateEmuThread);
 }
 
 void Stop()
@@ -954,11 +857,9 @@ void Stop()
 void Reset()
 {
     assert(State != emuState_Running);
-    mutexLock(&EmuThreadLock);
     Frontend::Reset();
     State = emuState_Running;
     StateAtomic = State;
-    mutexUnlock(&EmuThreadLock);
 }
 
 void DeriveScreenPoints(float* mat, Gfx::Vector2f* points, float scale)

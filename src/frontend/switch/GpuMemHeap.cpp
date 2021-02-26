@@ -154,8 +154,6 @@ GpuMemHeap::GpuMemHeap(dk::Device device, u32 size, u32 flags, u32 blockPoolSize
 
     Used = 0;
 
-    printf("init heap\n");
-
     MemBlock = dk::MemBlockMaker{device, size}
         .setFlags(flags).create();
 }
@@ -178,7 +176,7 @@ GpuMemHeap::Allocation GpuMemHeap::Alloc(u32 size, u32 align)
     align = std::max((u32)32, align);
     size = (size + align - 1) & ~(align - 1);
 
-    printf("allocating %f MB on heap %p (used %f%%)\n", (float)size/(1024.f*1024.f), MemBlock.getCpuAddr(), (float)Used/MemBlock.getSize());
+    //printf("allocating %f MB on heap %p (used %f%%)\n", (float)size/(1024.f*1024.f), MemBlock.getCpuAddr(), (float)Used/MemBlock.getSize());
 
     u32 fl, sl;
     MapSizeToSecondLevel(size + (align > 32 ? align : 0), fl, sl);

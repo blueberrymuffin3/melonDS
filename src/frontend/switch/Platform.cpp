@@ -69,14 +69,13 @@ void ThreadEntry(void* param)
 
 #define STACK_SIZE (1024 * 1024 * 4)
 
-int nextCore = 0;
+int nextCore = 1;
 
 Thread* Thread_Create(std::function<void()> func)
 {
     ::Thread* thread = new ::Thread();
-    threadCreate(thread, ThreadEntry, new ThreadEntryData{func}, NULL, STACK_SIZE, 0x1F, nextCore);
     // this relies on the order of thread creation, very bad
-    nextCore = 2;
+    threadCreate(thread, ThreadEntry, new ThreadEntryData{func}, NULL, STACK_SIZE, 0x30, nextCore++);
     threadStart(thread);
     return (Thread*)thread;
 }
