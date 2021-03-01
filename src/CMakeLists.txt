@@ -62,7 +62,7 @@ endif()
 if (ENABLE_NEONSOFTGPU)
 	target_sources(core PRIVATE
 		GPU3DGX_Neon.cpp
-		GPU2D_NeonSoft.cpp
+		#GPU2D_NeonSoft.cpp
 	)
 endif()
 

@@ -22,9 +22,6 @@
 #include "GPU.h"
 
 #include "GPU2D_Soft.h"
-#ifdef NEONSOFTGPU_ENABLED
-#include "GPU2D_NeonSoft.h"
-#endif
 
 namespace GPU
 {
