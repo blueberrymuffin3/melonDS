@@ -48,8 +48,6 @@ public:
     void initOpenGL();
     void deinitOpenGL();
 
-    void* oglGetProcAddress(const char* proc);
-
     void changeWindowTitle(char* title);
 
     // to be called from the UI thread
@@ -62,6 +60,9 @@ public:
 
     int FrontBuffer = 0;
     QMutex FrontBufferLock;
+
+    GLsync FrontBufferReverseSyncs[2] = {nullptr, nullptr};
+    GLsync FrontBufferSyncs[2] = {nullptr, nullptr};
 
 signals:
     void windowUpdate();
