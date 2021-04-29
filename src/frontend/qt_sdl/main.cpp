@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2020 Arisotura
+    Copyright 2016-2021 Arisotura
 
     This file is part of melonDS.
 
@@ -382,7 +382,7 @@ void EmuThread::run()
 
         if (Input::HotkeyPressed(HK_SwapScreens)) emit swapScreensToggle();
 
-        if (GBACart::CartInserted && GBACart::HasSolarSensor)
+        /*if (GBACart::CartInserted && GBACart::HasSolarSensor)
         {
             if (Input::HotkeyPressed(HK_SolarSensorDecrease))
             {
@@ -396,6 +396,26 @@ void EmuThread::run()
                 if (GBACart_SolarSensor::LightLevel < 10) GBACart_SolarSensor::LightLevel++;
                 char msg[64];
                 sprintf(msg, "Solar sensor level set to %d", GBACart_SolarSensor::LightLevel);
+                OSD::AddMessage(0, msg);
+            }
+        }*/
+        if (Input::HotkeyPressed(HK_SolarSensorDecrease))
+        {
+            int level = GBACart::SetInput(GBACart::Input_SolarSensorDown, true);
+            if (level != -1)
+            {
+                char msg[64];
+                sprintf(msg, "Solar sensor level: %d", level);
+                OSD::AddMessage(0, msg);
+            }
+        }
+        if (Input::HotkeyPressed(HK_SolarSensorIncrease))
+        {
+            int level = GBACart::SetInput(GBACart::Input_SolarSensorUp, true);
+            if (level != -1)
+            {
+                char msg[64];
+                sprintf(msg, "Solar sensor level: %d", level);
                 OSD::AddMessage(0, msg);
             }
         }
@@ -752,7 +772,7 @@ void ScreenHandler::screenOnMouseRelease(QMouseEvent* event)
 void ScreenHandler::screenOnMouseMove(QMouseEvent* event)
 {
     event->accept();
-    
+
     showCursor();
 
     if (!(event->buttons() & Qt::LeftButton)) return;
@@ -892,7 +912,7 @@ ScreenPanelGL::ScreenPanelGL(QWidget* parent) : QOpenGLWidget(parent)
 ScreenPanelGL::~ScreenPanelGL()
 {
     mouseTimer->stop();
-    
+
     makeCurrent();
 
     OSD::DeInit(this);
@@ -1134,15 +1154,18 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
 
         actOpenROM = menu->addAction("Open ROM...");
         connect(actOpenROM, &QAction::triggered, this, &MainWindow::onOpenFile);
-        
+        actOpenROM->setShortcut(QKeySequence(QKeySequence::StandardKey::Open));
+
         actOpenROMArchive = menu->addAction("Open ROM inside Archive...");
         connect(actOpenROMArchive, &QAction::triggered, this, &MainWindow::onOpenFileArchive);
+        actOpenROMArchive->setShortcut(QKeySequence(Qt::Key_O | Qt::CTRL | Qt::SHIFT));
 
         recentMenu = menu->addMenu("Open Recent");
-        for(int i = 0; i < 10; ++i)
+        for (int i = 0; i < 10; ++i)
         {
-            if(strlen(Config::RecentROMList[i]) > 0)
-                recentFileList.push_back(Config::RecentROMList[i]);
+            char* item = Config::RecentROMList[i];
+            if (strlen(item) > 0)
+                recentFileList.push_back(item);
         }
         updateRecentFilesMenu();
 
@@ -1225,6 +1248,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
         actEmuSettings = menu->addAction("Emu settings");
         connect(actEmuSettings, &QAction::triggered, this, &MainWindow::onOpenEmuSettings);
 
+#ifdef __APPLE__
+        QAction* actPreferences = menu->addAction("Preferences...");
+        connect(actPreferences, &QAction::triggered, this, &MainWindow::onOpenEmuSettings);
+        actPreferences->setMenuRole(QAction::PreferencesRole);
+#endif
+
         actInputConfig = menu->addAction("Input and hotkeys");
         connect(actInputConfig, &QAction::triggered, this, &MainWindow::onOpenInputConfig);
 
@@ -1236,7 +1265,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
 
         actWifiSettings = menu->addAction("Wifi settings");
         connect(actWifiSettings, &QAction::triggered, this, &MainWindow::onOpenWifiSettings);
-        
+
         actInterfaceSettings = menu->addAction("Interface settings");
         connect(actInterfaceSettings, &QAction::triggered, this, &MainWindow::onOpenInterfaceSettings);
 
@@ -1308,7 +1337,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
             }
 
             connect(grpScreenLayout, &QActionGroup::triggered, this, &MainWindow::onChangeScreenLayout);
-        
+
             submenu->addSeparator();
 
             actScreenSwap = submenu->addAction("Swap screens");
@@ -1455,7 +1484,7 @@ void MainWindow::createScreenPanel()
     {
         panelGL = new ScreenPanelGL(this);
         panelGL->show();
-        
+
         panel = panelGL;
         panelGL->setMouseTracking(true);
         mouseTimer = panelGL->setupMouseTimer();
@@ -1479,7 +1508,7 @@ void MainWindow::createScreenPanel()
         panelNative = new ScreenPanelNative(this);
         panel = panelNative;
         panel->show();
-        
+
         panelNative->setMouseTracking(true);
         mouseTimer = panelNative->setupMouseTimer();
         connect(mouseTimer, &QTimer::timeout, [=] { if (Config::MouseHide) panelNative->setCursor(Qt::BlankCursor);});
@@ -1544,7 +1573,7 @@ void MainWindow::dragEnterEvent(QDragEnterEvent* event)
 
     for(const QString &ext : acceptedExts)
     {
-        if(filename.endsWith(ext))
+        if(filename.endsWith(ext, Qt::CaseInsensitive))
             event->acceptProposedAction();
     }
 }
@@ -1559,7 +1588,7 @@ void MainWindow::dropEvent(QDropEvent* event)
     emuThread->emuPause();
 
     QString filename = urls.at(0).toLocalFile();
-    QString ext = filename.right(3);
+    QString ext = filename.right(3).toLower();
 
     recentFileList.removeAll(filename);
     recentFileList.prepend(filename);
@@ -1589,7 +1618,7 @@ void MainWindow::dropEvent(QDropEvent* event)
         }
         else
         {
-            slot = (romFileName.endsWith(".gba") ? 1 : 0);
+            slot = (romFileName.endsWith(".gba", Qt::CaseInsensitive) ? 1 : 0);
             QString sramFileName = QFileInfo(_filename).absolutePath() + QDir::separator() + QFileInfo(romFileName).completeBaseName() + ".sav";
 
             if(slot == 0)
@@ -1729,7 +1758,7 @@ void MainWindow::loadROM(QString filename)
     recentFileList.removeAll(filename);
     recentFileList.prepend(filename);
     updateRecentFilesMenu();
-  
+
     // TODO: validate the input file!!
     // * check that it is a proper ROM
     // * ensure the binary offsets are sane
@@ -1881,8 +1910,30 @@ void MainWindow::updateRecentFilesMenu()
 
     for(int i = 0; i < recentFileList.size(); ++i)
     {
-        QAction *actRecentFile_i = recentMenu->addAction(QString("%1.  %2").arg(i+1).arg(recentFileList.at(i)));
-        actRecentFile_i->setData(recentFileList.at(i));
+        QString item_full = recentFileList.at(i);
+        QString item_display = item_full;
+        int itemlen = item_full.length();
+        const int maxlen = 100;
+        if (itemlen > maxlen)
+        {
+            int cut_start = 0;
+            while (item_full[cut_start] != '/' && item_full[cut_start] != '\\' &&
+                   cut_start < itemlen)
+                cut_start++;
+
+            int cut_end = itemlen-1;
+            while (((item_full[cut_end] != '/' && item_full[cut_end] != '\\') ||
+                    (cut_start+4+(itemlen-cut_end) < maxlen)) &&
+                   cut_end > 0)
+                cut_end--;
+
+            item_display.truncate(cut_start+1);
+            item_display += "...";
+            item_display += item_full.remove(0, cut_end);
+        }
+
+        QAction *actRecentFile_i = recentMenu->addAction(QString("%1.  %2").arg(i+1).arg(item_display));
+        actRecentFile_i->setData(item_full);
         connect(actRecentFile_i, &QAction::triggered, this, &MainWindow::onClickRecentFile);
 
         if(i < 10)
@@ -1903,7 +1954,10 @@ void MainWindow::onClickRecentFile()
     QAction *act = (QAction *)sender();
     QString fileName = act->data().toString();
 
-    if(fileName.endsWith(".gba") || fileName.endsWith(".nds") || fileName.endsWith(".srl") || fileName.endsWith(".dsi"))
+    if (fileName.endsWith(".gba", Qt::CaseInsensitive) ||
+        fileName.endsWith(".nds", Qt::CaseInsensitive) ||
+        fileName.endsWith(".srl", Qt::CaseInsensitive) ||
+        fileName.endsWith(".dsi", Qt::CaseInsensitive))
     {
         emuThread->emuPause();
         loadROM(fileName);
@@ -2440,7 +2494,7 @@ void MainWindow::onUpdateVideoSettings(bool glchange)
     {
         emuThread->emuPause();
 
-        if (hasOGL) 
+        if (hasOGL)
         {
             emuThread->deinitOpenGL();
             delete panelGL;

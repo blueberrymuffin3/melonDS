@@ -1,5 +1,5 @@
 /*
-    Copyright 2016-2020 Arisotura
+    Copyright 2016-2021 Arisotura
 
     This file is part of melonDS.
 
@@ -52,7 +52,7 @@ Savestate::Savestate(const char* filename, bool save)
     if (save)
     {
         Saving = true;
-        file = Platform::OpenFile(filename, "wb");
+        file = Platform::OpenLocalFile(filename, "wb");
         if (!file)
         {
             printf("savestate: file %s doesn't exist\n", filename);
