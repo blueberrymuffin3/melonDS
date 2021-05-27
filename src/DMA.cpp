@@ -259,8 +259,8 @@ void DMA::Run9()
         if (IsGXFIFODMA)
         {
             u32 count = (NDS::ARM9Target - NDS::ARM9Timestamp) / (unitcycles << NDS::ARM9ClockShift);
-            count = std::min<u32>(count, 1);
-            count = std::max<u32>(count, IterCount);
+            count = std::max<u32>(count, 1);
+            count = std::min<u32>(count, IterCount);
 
             GPU3D::WriteBatchToGXFIFO((u32*)&NDS::MainRAM[CurSrcAddr & NDS::MainRAMMask], count);
 
