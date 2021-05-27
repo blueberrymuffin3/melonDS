@@ -72,7 +72,7 @@ void PushLastPlayed(const std::string& newPath, int titleIconIdx)
         }
     }
     if (LastPlayedROMs.size() >= 5)
-        LastPlayedROMs.erase(LastPlayedROMs.begin());
+        LastPlayedROMs.pop_back();
     LastPlayedROMs.insert(LastPlayedROMs.begin(), {titleIconIdx, newPath});
 }
 
