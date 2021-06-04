@@ -382,23 +382,6 @@ void EmuThread::run()
 
         if (Input::HotkeyPressed(HK_SwapScreens)) emit swapScreensToggle();
 
-        /*if (GBACart::CartInserted && GBACart::HasSolarSensor)
-        {
-            if (Input::HotkeyPressed(HK_SolarSensorDecrease))
-            {
-                if (GBACart_SolarSensor::LightLevel > 0) GBACart_SolarSensor::LightLevel--;
-                char msg[64];
-                sprintf(msg, "Solar sensor level set to %d", GBACart_SolarSensor::LightLevel);
-                OSD::AddMessage(0, msg);
-            }
-            if (Input::HotkeyPressed(HK_SolarSensorIncrease))
-            {
-                if (GBACart_SolarSensor::LightLevel < 10) GBACart_SolarSensor::LightLevel++;
-                char msg[64];
-                sprintf(msg, "Solar sensor level set to %d", GBACart_SolarSensor::LightLevel);
-                OSD::AddMessage(0, msg);
-            }
-        }*/
         if (Input::HotkeyPressed(HK_SolarSensorDecrease))
         {
             int level = GBACart::SetInput(GBACart::Input_SolarSensorDown, true);
@@ -781,15 +764,68 @@ void ScreenHandler::screenOnMouseMove(QMouseEvent* event)
     int x = event->pos().x();
     int y = event->pos().y();
 
-    Frontend::GetTouchCoords(x, y);
+    if (Frontend::GetTouchCoords(x, y))
+        NDS::TouchScreen(x, y);
+}
 
-    // clamp to screen range
-    if (x < 0) x = 0;
-    else if (x > 255) x = 255;
-    if (y < 0) y = 0;
-    else if (y > 191) y = 191;
+void ScreenHandler::screenHandleTablet(QTabletEvent* event)
+{
+    event->accept();
 
-    NDS::TouchScreen(x, y);
+    switch(event->type())
+    {
+    case QEvent::TabletPress:
+    case QEvent::TabletMove:
+        {
+            int x = event->x();
+            int y = event->y();
+
+            if (Frontend::GetTouchCoords(x, y))
+            {
+                touching = true;
+                NDS::TouchScreen(x, y);
+            }
+        }
+        break;
+    case QEvent::TabletRelease:
+        if (touching)
+        {
+            NDS::ReleaseScreen();
+            touching = false;
+        }
+        break;
+    }
+}
+
+void ScreenHandler::screenHandleTouch(QTouchEvent* event)
+{
+    event->accept();
+
+    switch(event->type())
+    {
+    case QEvent::TouchBegin:
+    case QEvent::TouchUpdate:
+        if (event->touchPoints().length() > 0)
+        {
+            QPointF lastPosition = event->touchPoints().first().lastPos();
+            int x = (int)lastPosition.x();
+            int y = (int)lastPosition.y();
+
+            if (Frontend::GetTouchCoords(x, y))
+            {
+                touching = true;
+                NDS::TouchScreen(x, y);
+            }
+        }
+        break;
+    case QEvent::TouchEnd:
+        if (touching)
+        {
+            NDS::ReleaseScreen();
+            touching = false;
+        }
+        break;
+    }
 }
 
 void ScreenHandler::showCursor()
@@ -817,6 +853,8 @@ ScreenPanelNative::ScreenPanelNative(QWidget* parent) : QWidget(parent)
     screenTrans[1].reset();
 
     touching = false;
+
+    setAttribute(Qt::WA_AcceptTouchEvents);
 
     OSD::Init(nullptr);
 }
@@ -896,6 +934,23 @@ void ScreenPanelNative::mouseMoveEvent(QMouseEvent* event)
     screenOnMouseMove(event);
 }
 
+void ScreenPanelNative::tabletEvent(QTabletEvent* event)
+{
+    screenHandleTablet(event);
+}
+
+bool ScreenPanelNative::event(QEvent* event)
+{
+    if (event->type() == QEvent::TouchBegin
+        || event->type() == QEvent::TouchEnd
+        || event->type() == QEvent::TouchUpdate)
+    {
+        screenHandleTouch((QTouchEvent*)event);
+        return true;
+    }
+    return QWidget::event(event);
+}
+
 void ScreenPanelNative::onScreenLayoutChanged()
 {
     setMinimumSize(screenGetMinSize());
@@ -907,6 +962,7 @@ ScreenPanelGL::ScreenPanelGL(QWidget* parent) : QOpenGLWidget(parent)
 {
     touching = false;
 
+    setAttribute(Qt::WA_AcceptTouchEvents);
 }
 
 ScreenPanelGL::~ScreenPanelGL()
@@ -1105,6 +1161,23 @@ void ScreenPanelGL::mouseReleaseEvent(QMouseEvent* event)
 void ScreenPanelGL::mouseMoveEvent(QMouseEvent* event)
 {
     screenOnMouseMove(event);
+}
+
+void ScreenPanelGL::tabletEvent(QTabletEvent* event)
+{
+    screenHandleTablet(event);
+}
+
+bool ScreenPanelGL::event(QEvent* event)
+{
+    if (event->type() == QEvent::TouchBegin
+        || event->type() == QEvent::TouchEnd
+        || event->type() == QEvent::TouchUpdate)
+    {
+        screenHandleTouch((QTouchEvent*)event);
+        return true;
+    }
+    return QWidget::event(event);
 }
 
 void ScreenPanelGL::onScreenLayoutChanged()
@@ -1929,7 +2002,7 @@ void MainWindow::updateRecentFilesMenu()
 
             item_display.truncate(cut_start+1);
             item_display += "...";
-            item_display += item_full.remove(0, cut_end);
+            item_display += QString(item_full).remove(0, cut_end);
         }
 
         QAction *actRecentFile_i = recentMenu->addAction(QString("%1.  %2").arg(i+1).arg(item_display));
@@ -1939,6 +2012,8 @@ void MainWindow::updateRecentFilesMenu()
         if(i < 10)
             strncpy(Config::RecentROMList[i], recentFileList.at(i).toStdString().c_str(), 1024);
     }
+
+    recentMenu->addSeparator();
 
     QAction *actClearRecentList = recentMenu->addAction("Clear");
     connect(actClearRecentList, &QAction::triggered, this, &MainWindow::onClearRecentFiles);

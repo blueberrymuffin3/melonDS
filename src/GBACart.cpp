@@ -40,14 +40,14 @@ const char SOLAR_SENSOR_GAMECODES[10][5] =
 
 
 bool CartInserted;
-//bool HasSolarSensor;
 u8* CartROM;
 u32 CartROMSize;
 u32 CartCRC;
 u32 CartID;
-//GPIO CartGPIO; // overridden GPIO parameters
 
 CartCommon* Cart;
+
+u16 OpenBusDecay;
 
 
 CartCommon::CartCommon()
@@ -198,11 +198,11 @@ void CartGame::LoadSave(const char* path, u32 type)
     case 128*1024:
         SRAMType = S_FLASH1M;
         break;
-    default:
-        printf("!! BAD GBA SAVE LENGTH %d\n", SRAMLength);
     case 0:
         SRAMType = S_NULL;
         break;
+    default:
+        printf("!! BAD GBA SAVE LENGTH %d\n", SRAMLength);
     }
 
     if (SRAMType == S_FLASH512K)
@@ -309,6 +309,8 @@ u8 CartGame::SRAMRead(u32 addr)
 
     case S_SRAM256K:
         return SRAMRead_SRAM(addr);
+    default:
+        break;
     }
 
     return 0xFF;
@@ -330,6 +332,8 @@ void CartGame::SRAMWrite(u32 addr, u8 val)
 
     case S_SRAM256K:
         return SRAMWrite_SRAM(addr, val);
+    default:
+        break;
     }
 }
 
@@ -627,6 +631,9 @@ void Reset()
     // This allows resetting a DS game without losing GBA state,
     // and resetting to firmware without the slot being emptied.
     // The Stop function will clear the cartridge state via Eject().
+
+    // OpenBusDecay doesn't need to be reset, either, as it will be set
+    // through NDS::SetGBASlotTimings().
 }
 
 void Eject()
@@ -704,7 +711,7 @@ void LoadROMCommon(const char *sram)
     printf("GBA game code: %s\n", gamecode);
 
     bool solarsensor = false;
-    for (int i = 0; i < sizeof(SOLAR_SENSOR_GAMECODES)/sizeof(SOLAR_SENSOR_GAMECODES[0]); i++)
+    for (size_t i = 0; i < sizeof(SOLAR_SENSOR_GAMECODES)/sizeof(SOLAR_SENSOR_GAMECODES[0]); i++)
     {
         if (strcmp(gamecode, SOLAR_SENSOR_GAMECODES[i]) == 0)
             solarsensor = true;
@@ -791,11 +798,17 @@ int SetInput(int num, bool pressed)
 }
 
 
+void SetOpenBusDecay(u16 val)
+{
+    OpenBusDecay = val;
+}
+
+
 u16 ROMRead(u32 addr)
 {
     if (Cart) return Cart->ROMRead(addr);
 
-    return (addr >> 1) & 0xFFFF;
+    return ((addr >> 1) & 0xFFFF) | OpenBusDecay;
 }
 
 void ROMWrite(u32 addr, u16 val)
