@@ -41,8 +41,10 @@ FILE* OpenLocalFile(const char* path, const char* mode)
     sprintf(finalPath, "/melonds/%s", path);
 
     ret = fopen(finalPath, mode);
+    if (ret)
+        return ret;
 
-    return ret;
+    return fopen(path, mode);
 }
 
 FILE* OpenDataFile(const char* path)
