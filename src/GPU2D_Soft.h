@@ -29,6 +29,8 @@ public:
     SoftRenderer();
     ~SoftRenderer() override {}
 
+    void Reset() override {}
+
     void DrawScanline(u32 line, Unit* unit) override;
     void DrawSprites(u32 line, Unit* unit) override;
     void VBlankEnd(Unit* unitA, Unit* unitB) override;

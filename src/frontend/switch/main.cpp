@@ -10,6 +10,7 @@
 
 #include "NDS.h"
 #include "GPU.h"
+#include "GPU2D_Deko.h"
 #include "SPU.h"
 #include "FrontendUtil.h"
 #include "Config.h"
@@ -124,7 +125,7 @@ namespace Emulation
 
 u64 PlatformKeysHeld;
 
-u32 FramebufferTextures[2];
+u32 FramebufferTextures[2][2];
 bool NewFrameReady = false;
 u32 CurrentFrontBuffer;
 
@@ -251,12 +252,13 @@ void Init()
     GPU::RenderSettings settings{true, 1, false};
     GPU::SetRenderSettings(0, settings);
 
-    u32 zeroData[256*192] = {0};
-    for (u32 i = 0; i < 2; i++)
+    for (int j = 0; j < 2; j++)
     {
-        FramebufferTextures[i] = Gfx::TextureCreate(256, 192, DkImageFormat_BGRX8_Unorm);
-
-        Gfx::TextureUpload(FramebufferTextures[i], 0, 0, 256, 192, zeroData, 256*4);
+        for (int i = 0; i < 2; i++)
+        {
+            FramebufferTextures[j][i] = Gfx::TextureCreateExternal(256, 192, 
+                ((GPU2D::DekoRenderer*)GPU::GPU2D_Renderer.get())->GetFramebuffer(j, i));
+        }
     }
 
     UpdateScreenLayout();
@@ -339,8 +341,9 @@ void DeInit()
 
     free(AudMemPool);
 
-    for (u32 i = 0; i < 2; i++)
-        Gfx::TextureDelete(FramebufferTextures[i]);
+    for (u32 j = 0; j < 2; j++)
+        for (u32 i = 0; i < 2; i++)
+            Gfx::TextureDelete(FramebufferTextures[j][i]);
 }
 
 const u32 KeyMappings[] =
@@ -579,6 +582,10 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
                     touchUseCursor = false;
                 }
             }
+            else
+            {
+                touchUseCursor = false;
+            }
 
             u32 keyMask = 0xFFF;
             for (int i = 0; i < 12; i++)
@@ -610,10 +617,33 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
                 }
                 UpdateScreenLayout();
             }
-            if (AutoScreenSizing != LastAutoScreenSizing)
+
             {
-                UpdateScreenLayout();
-                AutoScreenSizing = LastAutoScreenSizing;
+                MainScreenPosition[2] = MainScreenPosition[1];
+                MainScreenPosition[1] = MainScreenPosition[0];
+                MainScreenPosition[0] = NDS::PowerControl9 >> 15;
+                int guess;
+                if (MainScreenPosition[0] == MainScreenPosition[2] &&
+                    MainScreenPosition[0] != MainScreenPosition[1])
+                {
+                    // constant flickering, likely displaying 3D on both screens
+                    // TODO: when both screens are used for 2D only...???
+                    guess = 0;
+                }
+                else
+                {
+                    if (MainScreenPosition[0] == 1)
+                        guess = 1;
+                    else
+                        guess = 2;
+                }
+                AutoScreenSizing = guess;
+
+                if (AutoScreenSizing != LastAutoScreenSizing)
+                {
+                    UpdateScreenLayout();
+                    LastAutoScreenSizing = AutoScreenSizing;
+                }
             }
 
             if (FirstBotScreen != -1)
@@ -657,51 +687,27 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
             NDS::RunFrame();
             u64 frameLength = armTicksToNs(armGetSystemTick() - frameStart);
 
-            for (int i = 0; i < 2; i++)
-                Gfx::TextureUpload(FramebufferTextures[i], 0, 0, 256, 192, GPU::Framebuffer[GPU::FrontBuffer][i], 256*4);
+            //svcSleepThread(1000*1000*500);
 
             FrametimeHistogram[FrametimeHistogramNextValue] = (float)frameLength * 0.000001f;
             FrametimeHistogramNextValue++;
             if (FrametimeHistogramNextValue >= FrametimeHistogramLen)
                 FrametimeHistogramNextValue = 0;
-
-            {
-                MainScreenPosition[2] = MainScreenPosition[1];
-                MainScreenPosition[1] = MainScreenPosition[0];
-                MainScreenPosition[0] = NDS::PowerControl9 >> 15;
-                int guess;
-                if (MainScreenPosition[0] == MainScreenPosition[2] &&
-                    MainScreenPosition[0] != MainScreenPosition[1])
-                {
-                    // constant flickering, likely displaying 3D on both screens
-                    // TODO: when both screens are used for 2D only...???
-                    guess = 0;
-                }
-                else
-                {
-                    if (MainScreenPosition[0] == 1)
-                        guess = 1;
-                    else
-                        guess = 2;
-                }
-                AutoScreenSizing = guess;
-            }
         }
     }
 
     if (State != emuState_Nothing)
     {
-        if (Config::Filtering == 1)
-            Gfx::SetSmoothEdges(true);
+        Gfx::WaitForFenceReady(((GPU2D::DekoRenderer*)GPU::GPU2D_Renderer.get())->FramebufferReady[GPU::FrontBuffer]);
         Gfx::SetSampler((Config::Filtering == 0 ? Gfx::sampler_Nearest : Gfx::sampler_Linear) | Gfx::sampler_ClampToEdge);
         for (int i = 0; i < ScreensVisible; i++)
         {
-            Gfx::DrawRectangle(FramebufferTextures[ScreenKinds[i]], 
+            Gfx::DrawRectangle(FramebufferTextures[GPU::FrontBuffer][ScreenKinds[i]], 
                 ScreenPoints[i][0], ScreenPoints[i][1],
                 ScreenPoints[i][2], ScreenPoints[i][3],
                 {0.f, 0.f}, {256.f, 192.f});
         }
-        Gfx::SetSmoothEdges(false);
+        Gfx::SignalFence(((GPU2D::DekoRenderer*)GPU::GPU2D_Renderer.get())->FramebufferPresented[GPU::FrontBuffer]);
     }
 
     if (State == emuState_Running && touchUseCursor)
@@ -723,7 +729,6 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
 
     if (Config::ShowPerformanceMetrics && State == emuState_Running)
     {
-        // locking the mutex again, eh not so great
         Gfx::DrawRectangle({0.f, 0.f}, {4.f*FrametimeHistogramLen, TextLineHeight * 4.f}, DarkColorTransparent);
         float sum = 0.f, max = 0.f, min = infinityf();
         for (int i = 0; i < FrametimeHistogramLen; i++)

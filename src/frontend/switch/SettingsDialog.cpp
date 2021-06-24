@@ -340,7 +340,7 @@ void DoGui(BoxGui::Frame& parent)
             bool integerScaling = Config::IntegerScaling;
             DoCheckbox(settingsFrame, settingsSkewer, "Integer scaling", integerScaling);
             Config::IntegerScaling = integerScaling;
-            DoCombobox(settingsFrame, settingsSkewer, "Filtering", "Nearest\0Nearest smooth edges\0Linear\0", Config::Filtering);
+            DoCombobox(settingsFrame, settingsSkewer, "Filtering", "Nearest\0Linear\0", Config::Filtering);
         }
         Emulation::UpdateScreenLayout();
         break;

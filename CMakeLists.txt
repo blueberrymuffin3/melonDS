@@ -89,6 +89,11 @@ if (ARCHITECTURE STREQUAL ARM64)
 	endif()
 endif()
 
+option(ENABLE_DEKOGPU "Enable deko3D GPU" ON)
+if (ENABLE_DEKOGPU)
+	add_definitions(-DDEKOGPU_ENABLED)
+endif()
+
 if (CMAKE_BUILD_TYPE STREQUAL Debug)
 	add_compile_options(-Og)
 endif()

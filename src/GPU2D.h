@@ -124,17 +124,24 @@ class Renderer2D
 public:
     virtual ~Renderer2D() {}
 
+    virtual void Reset() = 0;
+
     virtual void DrawScanline(u32 line, Unit* unit) = 0;
     virtual void DrawSprites(u32 line, Unit* unit) = 0;
 
     virtual void VBlankEnd(Unit* unitA, Unit* unitB) = 0;
 
+    void SetFramebuffer(bool unitAIsTop)
+    {
+        UnitAIsTop = unitAIsTop;
+    }
     void SetFramebuffer(u32* unitA, u32* unitB)
     {
         Framebuffer[0] = unitA;
         Framebuffer[1] = unitB;
     }
 protected:
+    bool UnitAIsTop;
     u32* Framebuffer[2];
 
     Unit* CurUnit;

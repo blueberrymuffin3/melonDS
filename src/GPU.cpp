@@ -23,6 +23,11 @@
 
 #include "GPU2D_Soft.h"
 
+#ifdef DEKOGPU_ENABLED
+#include "GPU2D_Deko.h"
+#include "GPU3D_Deko.h"
+#endif
+
 namespace GPU
 {
 
@@ -141,7 +146,8 @@ std::unique_ptr<GLCompositor> CurGLCompositor = {};
 
 bool Init()
 {
-    GPU2D_Renderer = std::make_unique<GPU2D::SoftRenderer>();
+    //GPU2D_Renderer = std::make_unique<GPU2D::SoftRenderer>();
+    GPU2D_Renderer = std::make_unique<GPU2D::DekoRenderer>();
     if (!GPU3D::Init()) return false;
 
     FrontBuffer = 0;
@@ -267,6 +273,8 @@ void Reset()
 
     int backbuf = FrontBuffer ? 0 : 1;
     GPU2D_Renderer->SetFramebuffer(Framebuffer[backbuf][1], Framebuffer[backbuf][0]);
+    GPU2D_Renderer->SetFramebuffer(false);
+    GPU2D_Renderer->Reset();
 
     ResetRenderer();
 
@@ -369,10 +377,12 @@ void AssignFramebuffers()
     if (NDS::PowerControl9 & (1<<15))
     {
         GPU2D_Renderer->SetFramebuffer(Framebuffer[backbuf][0], Framebuffer[backbuf][1]);
+        GPU2D_Renderer->SetFramebuffer(true);
     }
     else
     {
         GPU2D_Renderer->SetFramebuffer(Framebuffer[backbuf][1], Framebuffer[backbuf][0]);
+        GPU2D_Renderer->SetFramebuffer(false);
     }
 }
 
@@ -403,8 +413,13 @@ void InitRenderer(int renderer)
     else
 #endif
     {
+#ifdef DEKOGPU_ENABLED
+        GPU3D::CurrentRenderer = std::make_unique<GPU3D::DekoRenderer>();
+        GPU3D::CurrentRenderer->Init();
+#else
         GPU3D::CurrentRenderer = std::make_unique<GPU3D::SoftRenderer>();
         GPU3D::CurrentRenderer->Init();
+#endif
     }
 
     Renderer = renderer;

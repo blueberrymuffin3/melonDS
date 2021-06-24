@@ -88,6 +88,8 @@ extern u32* Framebuffer[2][2];
 extern GPU2D::Unit GPU2D_A;
 extern GPU2D::Unit GPU2D_B;
 
+extern std::unique_ptr<GPU2D::Renderer2D> GPU2D_Renderer;
+
 extern int Renderer;
 
 const u32 VRAMDirtyGranularity = 512;

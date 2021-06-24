@@ -35,8 +35,8 @@ void Init()
 {
     MelonLogoTexture = Gfx::TextureCreate(128, 128, DkImageFormat_RGBA8_Unorm);
     int w, h, c;
-    u8* data = stbi_load("romfs:/melon_128x128.png", &w, &h, &c, 4);
-    Gfx::TextureUpload(MelonLogoTexture, 0, 0, 128, 128, data, 128*4);
+    u8* melonData = stbi_load("romfs:/melon_128x128.png", &w, &h, &c, 4);
+    Gfx::TextureUpload(MelonLogoTexture, 0, 0, 128, 128, melonData, 128*4);
 
     for (int i = 0; i < 5; i++)
     {

@@ -26,8 +26,8 @@ namespace Gfx
 {
 
 dk::Device Device;
-dk::Queue Queue;
-dk::CmdBuf CmdBuf;
+dk::Queue PresentQueue, EmuQueue;
+dk::CmdBuf PresentCmdBuf, EmuCmdBuf;
 dk::Swapchain Swapchain;
 
 struct Vertex
@@ -71,14 +71,15 @@ u32 CurClientVertex = 0;
 u32 CurClientIndex = 0;
 
 u32 CurSampler = 0;
-bool SmoothEdges = false;
 
 enum
 {
     drawCallDirty_Texture = 1 << 0,
     drawCallDirty_Sampler = 1 << 1,
     drawCallDirty_Scissor = 1 << 2,
-    drawCallDirty_Shader = 1 << 3
+    drawCallDirty_Shader = 1 << 3,
+    drawCallDirty_WaitFence = 1 << 4,
+    drawCallDirty_SignalFence = 1 << 5,
 };
 struct DrawCall
 {
@@ -86,7 +87,7 @@ struct DrawCall
     u32 TextureIdx, Sampler;
     u32 Count;
     DkScissor Scissor;
-    bool SmoothEdges;
+    dk::Fence* Fence;
 };
 std::vector<DrawCall> DrawCalls;
 
@@ -97,7 +98,7 @@ GpuMemHeap::Allocation UniformBuffer;
 GpuMemHeap::Allocation TextureStagingBuffer[2];
 u32 TextureStagingBufferOffset;
 
-dk::Shader VertexShader, FragmentShader, FragmentShaderSmoothEdges;
+dk::Shader VertexShader, FragmentShader;
 
 NWindow* Window;
 
@@ -137,6 +138,7 @@ struct Registry
 
 struct Texture
 {
+    bool External;
     u32 Width, Height;
     DkImageFormat Format;
     GpuMemHeap::Allocation GpuMem;
@@ -162,6 +164,7 @@ u32 TextureCreate(u32 width, u32 height, DkImageFormat format)
     u32 idx = Textures.Alloc();
 
     Texture& texture = Textures[idx];
+    texture.External = false;
     texture.Width = width;
     texture.Height = height;
     texture.Format = format;
@@ -182,11 +185,28 @@ u32 TextureCreate(u32 width, u32 height, DkImageFormat format)
     return idx;
 }
 
+u32 TextureCreateExternal(u32 width, u32 height, dk::Image& image)
+{
+    u32 idx = Textures.Alloc();
+    Texture& texture = Textures[idx];
+    texture.External = true;
+    texture.Image = image;
+    texture.Width = width;
+    texture.Height = height;
+    texture.ComponentSwizzle[0] = DkImageSwizzle_Red;
+    texture.ComponentSwizzle[1] = DkImageSwizzle_Green;
+    texture.ComponentSwizzle[2] = DkImageSwizzle_Blue;
+    texture.ComponentSwizzle[3] = DkImageSwizzle_Alpha;
+
+    return idx;
+}
+
 void TextureDelete(u32 idx)
 {
     Texture& texture = Textures[idx];
 
-    TextureHeap->Free(texture.GpuMem);
+    if (!texture.External)
+        TextureHeap->Free(texture.GpuMem);
 
     Textures.Free(idx);
 }
@@ -194,6 +214,7 @@ void TextureDelete(u32 idx)
 void TextureUpload(u32 index, u32 x, u32 y, u32 width, u32 height, void* data, u32 dataStride)
 {
     assert(TextureStagingBufferOffset + dataStride * height <= TextureStagingBuffer[0].Size);
+    assert(!Textures[index].External);
 
     TextureUploadsPending.push_back({index, x, y, width, height, dataStride});
     u8* stagingBufferCpuAddr = DataHeap->CpuAddr<u8>(TextureStagingBuffer[SwapchainSlot]) + TextureStagingBufferOffset;
@@ -502,20 +523,35 @@ void PopScissor()
     ScissorStack.pop_back();
 }
 
+void DebugOutput(void* userData, const char* context, DkResult result, const char* message)
+{
+    printf("deko debug %d %s", result, message);
+}
+
 void Init()
 {
     Window = nwindowGetDefault();
     nwindowSetDimensions(Window, 1920, 1080);
 
-    Device = dk::DeviceMaker{}.create();
-    Queue = dk::QueueMaker{Device}.setFlags(DkQueueFlags_Graphics).create();
+    Device = dk::DeviceMaker{}.setCbDebug(DebugOutput).create();
+    PresentQueue = dk::QueueMaker{Device}
+        .setFlags(DkQueueFlags_Graphics|DkQueueFlags_DisableZcull)
+        .setCommandMemorySize(DK_QUEUE_MIN_CMDMEM_SIZE*4)
+        .setFlushThreshold(DK_QUEUE_MIN_CMDMEM_SIZE)
+        .create();
+    EmuQueue = dk::QueueMaker{Device}
+        .setFlags(DkQueueFlags_HighPrio|DkQueueFlags_Graphics|DkQueueFlags_Compute|DkQueueFlags_DisableZcull)
+        .setCommandMemorySize(DK_QUEUE_MIN_CMDMEM_SIZE*4)
+        .setFlushThreshold(DK_QUEUE_MIN_CMDMEM_SIZE)
+        .create();
 
-    TextureHeap.emplace(Device, 1024*1024*64, DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image, 128);
-    ShaderCodeHeap.emplace(Device, 1024*1024,
-        DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached | DkMemBlockFlags_Code, 32);
-    DataHeap.emplace(Device, 1024*1024*32, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached, 128);
+    TextureHeap.emplace(Device, 1024*1024*120, DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image, 1024*8);
+    ShaderCodeHeap.emplace(Device, 1024*1024*12,
+        DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached | DkMemBlockFlags_Code, 64);
+    DataHeap.emplace(Device, 1024*1024*128, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached, 128);
 
-    CmdBuf = dk::CmdBufMaker{Device}.create();
+    PresentCmdBuf = dk::CmdBufMaker{Device}.create();
+    EmuCmdBuf = dk::CmdBufMaker{Device}.create();
     CmdMem.emplace(*DataHeap, 0x10000*2);
 
     dk::ImageLayout fbLayout;
@@ -536,7 +572,6 @@ void Init()
 
     LoadShader("romfs:/shaders/Default_vsh.dksh", VertexShader);
     LoadShader("romfs:/shaders/Default_fsh.dksh", FragmentShader);
-    LoadShader("romfs:/shaders/SmoothEdges_fsh.dksh", FragmentShaderSmoothEdges);
 
     for (int i = 0; i < 2; i++)
     {
@@ -591,12 +626,15 @@ void DeInit()
 
     FontAtlas.Destroy();
 
-    Queue.waitIdle();
+    PresentQueue.waitIdle();
+    EmuQueue.waitIdle();
 
     Swapchain.destroy();
 
-    CmdBuf.destroy();
-    Queue.destroy();
+    PresentCmdBuf.destroy();
+    EmuCmdBuf.destroy();
+    PresentQueue.destroy();
+    EmuQueue.destroy();
 
     CmdMem.reset();
 
@@ -642,7 +680,7 @@ void Rotate90Deg(u32& outX, u32& outY, u32 inX, u32 inY, int rotation)
 
 void StartFrame()
 {
-    SwapchainSlot = Queue.acquireImage(Swapchain);
+    SwapchainSlot = PresentQueue.acquireImage(Swapchain);
 
     AnimationTimestamp = armTicksToNs(armGetSystemTick()) * 0.000000001;
     if (!DoSkipTimestep)
@@ -673,9 +711,10 @@ void EndFrame(Color clearColor, int rotation)
     }
     Swapchain.setCrop(0, 0, fbPixelWidth, fbPixelHeight);
 
+
     FontAtlas.IssueUpload();
 
-    CmdMem->Begin(CmdBuf);
+    CmdMem->Begin(PresentCmdBuf);
 
     DkGpuAddr stagingBufferGpuAddr = DataHeap->GpuAddr(TextureStagingBuffer[SwapchainSlot]);
     for (u32 i = 0; i < TextureUploadsPending.size(); i++)
@@ -683,10 +722,12 @@ void EndFrame(Color clearColor, int rotation)
         PendingTextureUpload& upload = TextureUploadsPending[i];
         Texture& texture = Textures[upload.TextureIdx];
         dk::ImageView view{texture.Image};
-        CmdBuf.copyBufferToImage({stagingBufferGpuAddr, upload.DataStrideBytes, upload.Height}, view, {upload.X, upload.Y, 0, upload.Width, upload.Height, 1});
+        assert((stagingBufferGpuAddr & (DK_IMAGE_LINEAR_STRIDE_ALIGNMENT - 1)) == 0);
+        PresentCmdBuf.copyBufferToImage({stagingBufferGpuAddr, upload.DataStrideBytes, upload.Height}, view, {upload.X, upload.Y, 0, upload.Width, upload.Height, 1});
 
         u32 stride = upload.DataStrideBytes * upload.Height;
         stagingBufferGpuAddr += stride;
+        stagingBufferGpuAddr = (stagingBufferGpuAddr + DK_IMAGE_LINEAR_STRIDE_ALIGNMENT - 1) & ~(DK_IMAGE_LINEAR_STRIDE_ALIGNMENT - 1);
     }
     assert(stagingBufferGpuAddr - DataHeap->GpuAddr(TextureStagingBuffer[SwapchainSlot]) == TextureStagingBufferOffset);
     if (TextureUploadsPending.size() > 0)
@@ -694,32 +735,36 @@ void EndFrame(Color clearColor, int rotation)
         TextureStagingBufferOffset = 0;
         TextureUploadsPending.clear();
 
-        CmdBuf.barrier(DkBarrier_Full, 0);
+        PresentCmdBuf.barrier(DkBarrier_Full, 0);
     }
 
     dk::ImageView colorTarget{Framebuffers[SwapchainSlot]};
-    CmdBuf.bindRenderTargets(&colorTarget);
+    PresentCmdBuf.bindRenderTargets(&colorTarget);
 
-    CmdBuf.setScissors(0, {{0, 0, fbPixelWidth, fbPixelHeight}});
-    CmdBuf.setViewports(0, {{0, 0, (float)fbPixelWidth, (float)fbPixelHeight}});
-    CmdBuf.clearColor(0, DkColorMask_RGBA, clearColor.R, clearColor.G, clearColor.B, clearColor.A);
+    PresentCmdBuf.setScissors(0, {{0, 0, fbPixelWidth, fbPixelHeight}});
+    PresentCmdBuf.setViewports(0, {{0, 0, (float)fbPixelWidth, (float)fbPixelHeight}});
+    PresentCmdBuf.clearColor(0, DkColorMask_RGBA, clearColor.R, clearColor.G, clearColor.B, clearColor.A);
 
-    CmdBuf.bindColorState(dk::ColorState{}.setBlendEnable(0, true));
-    CmdBuf.bindBlendStates(0, dk::BlendState{}
+    PresentCmdBuf.bindDepthStencilState(dk::DepthStencilState{}
+        .setDepthWriteEnable(false)
+        .setDepthTestEnable(false));
+
+    PresentCmdBuf.bindColorState(dk::ColorState{}.setBlendEnable(0, true));
+    PresentCmdBuf.bindBlendStates(0, dk::BlendState{}
             .setColorBlendOp(DkBlendOp_Add)
             .setSrcColorBlendFactor(DkBlendFactor_SrcAlpha)
             .setDstColorBlendFactor(DkBlendFactor_InvSrcAlpha));
 
-    CmdBuf.bindVtxBuffer(0, DataHeap->GpuAddr(VertexData[SwapchainSlot]), VertexData[SwapchainSlot].Size);
-    CmdBuf.bindVtxAttribState(
+    PresentCmdBuf.bindVtxBuffer(0, DataHeap->GpuAddr(VertexData[SwapchainSlot]), VertexData[SwapchainSlot].Size);
+    PresentCmdBuf.bindVtxAttribState(
     {
         DkVtxAttribState{0, 0, offsetof(Vertex, Position), DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0},
         DkVtxAttribState{0, 0, offsetof(Vertex, UV), DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0},
         DkVtxAttribState{0, 0, offsetof(Vertex, Color), DkVtxAttribSize_4x8, DkVtxAttribType_Unorm, 0},
         DkVtxAttribState{0, 0, offsetof(Vertex, CoolTransparency), DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0},
     });
-    CmdBuf.bindVtxBufferState({{sizeof(Vertex), 0}});
-    CmdBuf.bindIdxBuffer(DkIdxFormat_Uint16, DataHeap->GpuAddr(IndexData[SwapchainSlot]));
+    PresentCmdBuf.bindVtxBufferState({{sizeof(Vertex), 0}});
+    PresentCmdBuf.bindIdxBuffer(DkIdxFormat_Uint16, DataHeap->GpuAddr(IndexData[SwapchainSlot]));
 
     {
         Transformation transformation;
@@ -734,8 +779,8 @@ void EndFrame(Color clearColor, int rotation)
         xm4_mul(rot, trans, rot);
         xm4_mul(transformation.Projection, rot, transformation.Projection);
         transformation.InvHeight = 1.f / screenHeight;
-        CmdBuf.pushConstants(DataHeap->GpuAddr(UniformBuffer), UniformBuffer.Size, 0, sizeof(Transformation), &transformation);
-        CmdBuf.bindUniformBuffer(DkStage_Vertex, 0, DataHeap->GpuAddr(UniformBuffer), UniformBuffer.Size);
+        PresentCmdBuf.pushConstants(DataHeap->GpuAddr(UniformBuffer), UniformBuffer.Size, 0, sizeof(Transformation), &transformation);
+        PresentCmdBuf.bindUniformBuffer(DkStage_Vertex, 0, DataHeap->GpuAddr(UniformBuffer), UniformBuffer.Size);
     }
 
     memcpy(DataHeap->CpuAddr<void>(VertexData[SwapchainSlot]), VertexDataClient, sizeof(Vertex)*CurClientVertex);
@@ -753,55 +798,66 @@ void EndFrame(Color clearColor, int rotation)
         imageDescriptors[i].initialize(view);
     }
 
-    CmdBuf.bindSamplerDescriptorSet(DataHeap->GpuAddr(SamplerDescriptor), 4);
-    CmdBuf.bindImageDescriptorSet(DataHeap->GpuAddr(ImageDescriptors[SwapchainSlot]), UsedTextures.size());
+    PresentCmdBuf.bindSamplerDescriptorSet(DataHeap->GpuAddr(SamplerDescriptor), 4);
+    PresentCmdBuf.bindImageDescriptorSet(DataHeap->GpuAddr(ImageDescriptors[SwapchainSlot]), UsedTextures.size());
 
     u32 indexBufferOffset = 0;
 
     for (u32 i = 0; i < DrawCalls.size(); i++)
     {
         DrawCall& drawCall = DrawCalls[i];
-        if (drawCall.Dirty & drawCallDirty_Scissor)
+        if (drawCall.Dirty & drawCallDirty_WaitFence)
         {
-            // hacky
-            DkScissor scissor = drawCall.Scissor;
-            u32 x1, y1, x2, y2;
-            Rotate90DegInv(x1, y1, scissor.x, scissor.y, rotation);
-            Rotate90DegInv(x2, y2, scissor.x + scissor.width, scissor.y + scissor.height, rotation);
-
-            scissor.x = std::min(x1, x2);
-            scissor.y = std::min(y1, y2);
-            scissor.width = abs((s32)x1 - (s32)x2);
-            scissor.height = abs((s32)y1 - (s32)y2);
-            if (fbPixelHeight == 1080)
+            assert(drawCall.Fence);
+            PresentCmdBuf.waitFence(*drawCall.Fence);
+        }
+        else if (drawCall.Dirty & drawCallDirty_SignalFence)
+        {
+            assert(drawCall.Fence);
+            PresentCmdBuf.signalFence(*drawCall.Fence);
+        }
+        else
+        {
+            if (drawCall.Dirty & drawCallDirty_Scissor)
             {
-                scissor.x = scissor.x * 3 / 2;
-                scissor.y = scissor.y * 3 / 2;
-                scissor.width = scissor.width * 3 / 2;
-                scissor.height = scissor.height * 3 / 2;
-            }
-            CmdBuf.setScissors(0, {scissor});
-        }
-        if (drawCall.Dirty & (drawCallDirty_Texture|drawCallDirty_Sampler))
-        {
-            assert(Textures[drawCall.TextureIdx].ImageDescriptorIdx != -1);
-            assert(Textures[drawCall.TextureIdx].ImageDescriptorIdx < UsedTextures.size());
-            CmdBuf.bindTextures(DkStage_Fragment, 0,
-                dkMakeTextureHandle(Textures[drawCall.TextureIdx].ImageDescriptorIdx, drawCall.Sampler));
-        }
-        if (drawCall.Dirty & drawCallDirty_Shader)
-        {
-            CmdBuf.bindShaders(DkStageFlag_GraphicsMask, {&VertexShader, drawCall.SmoothEdges
-                ? &FragmentShaderSmoothEdges
-                : &FragmentShader});
-        }
+                // hacky
+                DkScissor scissor = drawCall.Scissor;
+                u32 x1, y1, x2, y2;
+                Rotate90DegInv(x1, y1, scissor.x, scissor.y, rotation);
+                Rotate90DegInv(x2, y2, scissor.x + scissor.width, scissor.y + scissor.height, rotation);
 
-        CmdBuf.drawIndexed(DkPrimitive_Triangles, drawCall.Count, 1, indexBufferOffset, 0, 0);
-        indexBufferOffset += drawCall.Count;
+                scissor.x = std::min(x1, x2);
+                scissor.y = std::min(y1, y2);
+                scissor.width = abs((s32)x1 - (s32)x2);
+                scissor.height = abs((s32)y1 - (s32)y2);
+                if (fbPixelHeight == 1080)
+                {
+                    scissor.x = scissor.x * 3 / 2;
+                    scissor.y = scissor.y * 3 / 2;
+                    scissor.width = scissor.width * 3 / 2;
+                    scissor.height = scissor.height * 3 / 2;
+                }
+                PresentCmdBuf.setScissors(0, {scissor});
+            }
+            if (drawCall.Dirty & (drawCallDirty_Texture|drawCallDirty_Sampler))
+            {
+                assert(Textures[drawCall.TextureIdx].ImageDescriptorIdx != -1);
+                assert(Textures[drawCall.TextureIdx].ImageDescriptorIdx < UsedTextures.size());
+                PresentCmdBuf.bindTextures(DkStage_Fragment, 0,
+                    dkMakeTextureHandle(Textures[drawCall.TextureIdx].ImageDescriptorIdx, drawCall.Sampler));
+            }
+            if (drawCall.Dirty & drawCallDirty_Shader)
+            {
+                PresentCmdBuf.bindShaders(DkStageFlag_GraphicsMask, {&VertexShader, &FragmentShader});
+            }
+
+            PresentCmdBuf.drawIndexed(DkPrimitive_Triangles, drawCall.Count, 1, indexBufferOffset, 0, 0);
+            indexBufferOffset += drawCall.Count;
+        }
     }
 
-    Queue.submitCommands(CmdMem->End(CmdBuf));
-    Queue.presentImage(Swapchain, SwapchainSlot);
+    PresentQueue.submitCommands(CmdMem->End(PresentCmdBuf));
+    PresentQueue.presentImage(Swapchain, SwapchainSlot);
 
     DrawCalls.clear();
     for (u32 i = 0; i < UsedTextures.size(); i++)
@@ -809,10 +865,21 @@ void EndFrame(Color clearColor, int rotation)
     UsedTextures.clear();
 }
 
+void WaitForFenceReady(dk::Fence& fence)
+{
+    DrawCalls.push_back({drawCallDirty_WaitFence, 0, 0, 0, DkScissor(), &fence});
+}
+
+void SignalFence(dk::Fence& fence)
+{
+    DrawCalls.push_back({drawCallDirty_SignalFence, 0, 0, 0, DkScissor(), &fence});
+}
+
 void IssueDrawCall(u32 texture, u32 count)
 {
     u32 dirty = 0;
     DkScissor& curScissor = ScissorStack[ScissorStack.size() - 1];
+    bool lastWasFence = false;
     if (DrawCalls.size() > 0)
     {
         DrawCall& prevDrawCall = DrawCalls[DrawCalls.size() - 1];
@@ -820,8 +887,6 @@ void IssueDrawCall(u32 texture, u32 count)
             dirty |= drawCallDirty_Texture;
         if (prevDrawCall.Sampler != CurSampler)
             dirty |= drawCallDirty_Sampler;
-        if (prevDrawCall.SmoothEdges != SmoothEdges)
-            dirty |= drawCallDirty_Shader;
 
         if (prevDrawCall.Scissor.x != curScissor.x
             || prevDrawCall.Scissor.y != curScissor.y
@@ -830,10 +895,13 @@ void IssueDrawCall(u32 texture, u32 count)
         {
             dirty |= drawCallDirty_Scissor;
         }
+
+        if (prevDrawCall.Fence)
+            lastWasFence = true;
     }
     else
     {
-        dirty = ~0;
+        dirty = ~(drawCallDirty_WaitFence|drawCallDirty_SignalFence);
     }
 
     if (Textures[texture].ImageDescriptorIdx == -1)
@@ -842,8 +910,8 @@ void IssueDrawCall(u32 texture, u32 count)
         UsedTextures.push_back(texture);
     }
 
-    if (dirty)
-        DrawCalls.push_back({dirty, texture, CurSampler, count, curScissor, SmoothEdges});
+    if (dirty || lastWasFence)
+        DrawCalls.push_back({dirty, texture, CurSampler, count, curScissor, nullptr});
     else
         DrawCalls[DrawCalls.size() - 1].Count += count;
 }
@@ -851,11 +919,6 @@ void IssueDrawCall(u32 texture, u32 count)
 void SetSampler(u32 sampler)
 {
     CurSampler = sampler;
-}
-
-void SetSmoothEdges(bool enabled)
-{
-    SmoothEdges = enabled;
 }
 
 void DrawRectangle(u32 texIdx, 

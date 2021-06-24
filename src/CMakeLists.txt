@@ -29,6 +29,7 @@ add_library(core STATIC
 	GPU2D.cpp
 	GPU2D_Soft.cpp
 	GPU3D.cpp
+	GPU3D_Transform.cpp
 	GPU3D_Soft.cpp
 	melonDLDI.h
 	NDS.cpp
@@ -49,6 +50,15 @@ add_library(core STATIC
 	xxhash/xxhash.c
 )
 
+target_include_directories(core PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+
+if (ENABLE_DEKOGPU)
+	target_sources(core PRIVATE
+		GPU2D_Deko.cpp
+		GPU3D_Deko.cpp
+	)
+endif()
+
 if (ENABLE_OGLRENDERER)
 	target_sources(core PRIVATE
 		GPU_OpenGL.cpp
@@ -61,7 +71,6 @@ endif()
 
 if (ENABLE_NEONSOFTGPU)
 	target_sources(core PRIVATE
-		GPU3DGX_Neon.cpp
 		#GPU2D_NeonSoft.cpp
 	)
 endif()
@@ -123,7 +132,11 @@ else()
 	if (WIN32)
 		target_link_libraries(core ole32 comctl32 ws2_32)
 	elseif (SWITCH)
-		target_link_libraries(core)
+		if (${CMAKE_BUILD_TYPE} STREQUAL Release)
+			target_link_libraries(core nx deko3d)
+		else()
+			target_link_libraries(core deko3dd nxd)
+		endif()
 	else()
 		target_link_libraries(core rt)
 	endif()

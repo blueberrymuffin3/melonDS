@@ -160,7 +160,6 @@ GpuMemHeap::GpuMemHeap(dk::Device device, u32 size, u32 flags, u32 blockPoolSize
 
 GpuMemHeap::~GpuMemHeap()
 {
-    //printf("destroying heap\n");
     MemBlock.destroy();
 
     delete[] BlockPool;
@@ -215,6 +214,7 @@ GpuMemHeap::Allocation GpuMemHeap::Alloc(u32 size, u32 align)
     }
 
     assert((block->Offset & (align - 1)) == 0);
+    assert(block->Size == size);
     return {(u32)(block - BlockPool), block->Offset, block->Size};
 }
 

@@ -252,8 +252,7 @@ u32 TexPalette;
 s32 PosTestResult[4];
 s16 VecTestResult[3];
 
-s32 PendingVertices[4][4];
-u32 NumPendingVertices = 0;
+u32 NumPendingVertices, PendingVerticesStart;
 
 Vertex TempVertexBuffer[4];
 u32 VertexNum;
@@ -275,41 +274,19 @@ u32 RenderNumPolygons;
 
 u32 FlushRequest;
 u32 FlushAttributes;
-/*
-void FlushPendingVertices(u32 num)
-{
-    if (NumPendingVertices == num) return;
 
-    u32 i = NumPendingVertices - num;
-    asm volatile
-    (
-        "ld1 {v0.16b, v1.16b, v2.16b, v3.16b}\n"
-
-        "ld1 {v4.16b}, []\n"
-
-        "smull v5.2d, v0.2s, v0.4s[0]\n"
-        "smlal v5.2d, v1.2s, v0.4s[1]\n"
-        "smlal v5.2d, v2.4s, v0.4s[2]\n"
-        "smlal v5.2d, v3.4s, v0.4s[3]\n"
-
-        "shrn v5.2s, v5.2d, #12\n"
-
-        "smull2 v6.2d, v0.4s, v0.4s[0]\n"
-        "smlal2 v6.2d, v0.4s, v0.4s[1]\n"
-        "smlal2 v6.2d, v0.4s, v0.4s[2]\n"
-        "smlal2 v6.2d, v0.4s, v0.4s[3]\n"
-
-        "shrn2 v5.4s, v6.2d, #12\n"
-
-        "st1 {v5.4s}, [%[]]\n"
-
-        "sub %w[i], %w[i], #1\n"
-        "bnz %w[i]\n"
-    );
-
-    NumPendingVertices = num;
-}*/
 std::unique_ptr<GPU3D::Renderer3D> CurrentRenderer = {};
+
+void MatrixMult4x4(s32* m, s32* s);
+void MatrixMult4x3(s32* m, s32* s);
+void MatrixMult3x3(s32* m, s32* s);
+void MatrixScale(s32* m, s32* s);
+void MatrixTranslate(s32* m, s32* s);
+
+template<bool attribs>
+int ClipPolygon(Vertex* vertices, int nverts, int clipstart);
+
+void TransformVertices(Vertex* vertices, int num);
 
 bool Init()
 {
@@ -692,119 +669,6 @@ void MatrixLoad4x3(s32* m, s32* s)
     m[12] = s[9]; m[13] = s[10]; m[14] = s[11]; m[15] = 0x1000;
 }
 
-#if NEONSOFTGPU_ENABLED
-void MatrixMult4x4(s32* m, s32* s)
-{
-    s32 tmp[16];
-    memcpy(tmp, m, 16*4);
-
-    // m = s*m
-    m[0] = ((s64)s[0]*tmp[0] + (s64)s[1]*tmp[4] + (s64)s[2]*tmp[8] + (s64)s[3]*tmp[12]) >> 12;
-    m[1] = ((s64)s[0]*tmp[1] + (s64)s[1]*tmp[5] + (s64)s[2]*tmp[9] + (s64)s[3]*tmp[13]) >> 12;
-    m[2] = ((s64)s[0]*tmp[2] + (s64)s[1]*tmp[6] + (s64)s[2]*tmp[10] + (s64)s[3]*tmp[14]) >> 12;
-    m[3] = ((s64)s[0]*tmp[3] + (s64)s[1]*tmp[7] + (s64)s[2]*tmp[11] + (s64)s[3]*tmp[15]) >> 12;
-
-    m[4] = ((s64)s[4]*tmp[0] + (s64)s[5]*tmp[4] + (s64)s[6]*tmp[8] + (s64)s[7]*tmp[12]) >> 12;
-    m[5] = ((s64)s[4]*tmp[1] + (s64)s[5]*tmp[5] + (s64)s[6]*tmp[9] + (s64)s[7]*tmp[13]) >> 12;
-    m[6] = ((s64)s[4]*tmp[2] + (s64)s[5]*tmp[6] + (s64)s[6]*tmp[10] + (s64)s[7]*tmp[14]) >> 12;
-    m[7] = ((s64)s[4]*tmp[3] + (s64)s[5]*tmp[7] + (s64)s[6]*tmp[11] + (s64)s[7]*tmp[15]) >> 12;
-
-    m[8] = ((s64)s[8]*tmp[0] + (s64)s[9]*tmp[4] + (s64)s[10]*tmp[8] + (s64)s[11]*tmp[12]) >> 12;
-    m[9] = ((s64)s[8]*tmp[1] + (s64)s[9]*tmp[5] + (s64)s[10]*tmp[9] + (s64)s[11]*tmp[13]) >> 12;
-    m[10] = ((s64)s[8]*tmp[2] + (s64)s[9]*tmp[6] + (s64)s[10]*tmp[10] + (s64)s[11]*tmp[14]) >> 12;
-    m[11] = ((s64)s[8]*tmp[3] + (s64)s[9]*tmp[7] + (s64)s[10]*tmp[11] + (s64)s[11]*tmp[15]) >> 12;
-
-    m[12] = ((s64)s[12]*tmp[0] + (s64)s[13]*tmp[4] + (s64)s[14]*tmp[8] + (s64)s[15]*tmp[12]) >> 12;
-    m[13] = ((s64)s[12]*tmp[1] + (s64)s[13]*tmp[5] + (s64)s[14]*tmp[9] + (s64)s[15]*tmp[13]) >> 12;
-    m[14] = ((s64)s[12]*tmp[2] + (s64)s[13]*tmp[6] + (s64)s[14]*tmp[10] + (s64)s[15]*tmp[14]) >> 12;
-    m[15] = ((s64)s[12]*tmp[3] + (s64)s[13]*tmp[7] + (s64)s[14]*tmp[11] + (s64)s[15]*tmp[15]) >> 12;
-}
-
-void MatrixMult4x3(s32* m, s32* s)
-{
-    s32 tmp[16];
-    memcpy(tmp, m, 16*4);
-
-    // m = s*m
-    m[0] = ((s64)s[0]*tmp[0] + (s64)s[1]*tmp[4] + (s64)s[2]*tmp[8]) >> 12;
-    m[1] = ((s64)s[0]*tmp[1] + (s64)s[1]*tmp[5] + (s64)s[2]*tmp[9]) >> 12;
-    m[2] = ((s64)s[0]*tmp[2] + (s64)s[1]*tmp[6] + (s64)s[2]*tmp[10]) >> 12;
-    m[3] = ((s64)s[0]*tmp[3] + (s64)s[1]*tmp[7] + (s64)s[2]*tmp[11]) >> 12;
-
-    m[4] = ((s64)s[3]*tmp[0] + (s64)s[4]*tmp[4] + (s64)s[5]*tmp[8]) >> 12;
-    m[5] = ((s64)s[3]*tmp[1] + (s64)s[4]*tmp[5] + (s64)s[5]*tmp[9]) >> 12;
-    m[6] = ((s64)s[3]*tmp[2] + (s64)s[4]*tmp[6] + (s64)s[5]*tmp[10]) >> 12;
-    m[7] = ((s64)s[3]*tmp[3] + (s64)s[4]*tmp[7] + (s64)s[5]*tmp[11]) >> 12;
-
-    m[8] = ((s64)s[6]*tmp[0] + (s64)s[7]*tmp[4] + (s64)s[8]*tmp[8]) >> 12;
-    m[9] = ((s64)s[6]*tmp[1] + (s64)s[7]*tmp[5] + (s64)s[8]*tmp[9]) >> 12;
-    m[10] = ((s64)s[6]*tmp[2] + (s64)s[7]*tmp[6] + (s64)s[8]*tmp[10]) >> 12;
-    m[11] = ((s64)s[6]*tmp[3] + (s64)s[7]*tmp[7] + (s64)s[8]*tmp[11]) >> 12;
-
-    m[12] = ((s64)s[9]*tmp[0] + (s64)s[10]*tmp[4] + (s64)s[11]*tmp[8] + (s64)0x1000*tmp[12]) >> 12;
-    m[13] = ((s64)s[9]*tmp[1] + (s64)s[10]*tmp[5] + (s64)s[11]*tmp[9] + (s64)0x1000*tmp[13]) >> 12;
-    m[14] = ((s64)s[9]*tmp[2] + (s64)s[10]*tmp[6] + (s64)s[11]*tmp[10] + (s64)0x1000*tmp[14]) >> 12;
-    m[15] = ((s64)s[9]*tmp[3] + (s64)s[10]*tmp[7] + (s64)s[11]*tmp[11] + (s64)0x1000*tmp[15]) >> 12;
-}
-
-void MatrixMult3x3(s32* m, s32* s)
-{
-    s32 tmp[12];
-    memcpy(tmp, m, 12*4);
-
-    // m = s*m
-    m[0] = ((s64)s[0]*tmp[0] + (s64)s[1]*tmp[4] + (s64)s[2]*tmp[8]) >> 12;
-    m[1] = ((s64)s[0]*tmp[1] + (s64)s[1]*tmp[5] + (s64)s[2]*tmp[9]) >> 12;
-    m[2] = ((s64)s[0]*tmp[2] + (s64)s[1]*tmp[6] + (s64)s[2]*tmp[10]) >> 12;
-    m[3] = ((s64)s[0]*tmp[3] + (s64)s[1]*tmp[7] + (s64)s[2]*tmp[11]) >> 12;
-
-    m[4] = ((s64)s[3]*tmp[0] + (s64)s[4]*tmp[4] + (s64)s[5]*tmp[8]) >> 12;
-    m[5] = ((s64)s[3]*tmp[1] + (s64)s[4]*tmp[5] + (s64)s[5]*tmp[9]) >> 12;
-    m[6] = ((s64)s[3]*tmp[2] + (s64)s[4]*tmp[6] + (s64)s[5]*tmp[10]) >> 12;
-    m[7] = ((s64)s[3]*tmp[3] + (s64)s[4]*tmp[7] + (s64)s[5]*tmp[11]) >> 12;
-
-    m[8] = ((s64)s[6]*tmp[0] + (s64)s[7]*tmp[4] + (s64)s[8]*tmp[8]) >> 12;
-    m[9] = ((s64)s[6]*tmp[1] + (s64)s[7]*tmp[5] + (s64)s[8]*tmp[9]) >> 12;
-    m[10] = ((s64)s[6]*tmp[2] + (s64)s[7]*tmp[6] + (s64)s[8]*tmp[10]) >> 12;
-    m[11] = ((s64)s[6]*tmp[3] + (s64)s[7]*tmp[7] + (s64)s[8]*tmp[11]) >> 12;
-}
-
-void MatrixScale(s32* m, s32* s)
-{
-    m[0] = ((s64)s[0]*m[0]) >> 12;
-    m[1] = ((s64)s[0]*m[1]) >> 12;
-    m[2] = ((s64)s[0]*m[2]) >> 12;
-    m[3] = ((s64)s[0]*m[3]) >> 12;
-
-    m[4] = ((s64)s[1]*m[4]) >> 12;
-    m[5] = ((s64)s[1]*m[5]) >> 12;
-    m[6] = ((s64)s[1]*m[6]) >> 12;
-    m[7] = ((s64)s[1]*m[7]) >> 12;
-
-    m[8] = ((s64)s[2]*m[8]) >> 12;
-    m[9] = ((s64)s[2]*m[9]) >> 12;
-    m[10] = ((s64)s[2]*m[10]) >> 12;
-    m[11] = ((s64)s[2]*m[11]) >> 12;
-}
-
-void MatrixTranslate(s32* m, s32* s)
-{
-    m[12] += ((s64)s[0]*m[0] + (s64)s[1]*m[4] + (s64)s[2]*m[8]) >> 12;
-    m[13] += ((s64)s[0]*m[1] + (s64)s[1]*m[5] + (s64)s[2]*m[9]) >> 12;
-    m[14] += ((s64)s[0]*m[2] + (s64)s[1]*m[6] + (s64)s[2]*m[10]) >> 12;
-    m[15] += ((s64)s[0]*m[3] + (s64)s[1]*m[7] + (s64)s[2]*m[11]) >> 12;
-}
-
-#else
-
-void MatrixMult4x4(s32* m, s32* s);
-void MatrixMult4x3(s32* m, s32* s);
-void MatrixMult3x3(s32* m, s32* s);
-void MatrixScale(s32* m, s32* s);
-void MatrixTranslate(s32* m, s32* s);
-
-#endif
-
 void UpdateClipMatrix()
 {
     if (!ClipMatrixDirty) return;
@@ -813,8 +677,6 @@ void UpdateClipMatrix()
     memcpy(ClipMatrix, ProjMatrix, 16*4);
     MatrixMult4x4(ClipMatrix, PosMatrix);
 }
-
-
 
 void AddCycles(s32 num)
 {
@@ -911,143 +773,6 @@ void StallPolygonPipeline(s32 delay, s32 nonstalldelay)
         else
             AddCycles(NormalPipeline + 1);
     }
-}
-
-
-
-template<int comp, s32 plane, bool attribs>
-void ClipSegment(Vertex* outbuf, Vertex* vin, Vertex* vout)
-{
-    s64 factor_num = vin->Position[3] - (plane*vin->Position[comp]);
-    s32 factor_den = factor_num - (vout->Position[3] - (plane*vout->Position[comp]));
-
-#define INTERPOLATE(var)  { outbuf->var = (vin->var + ((vout->var - vin->var) * factor_num) / factor_den); }
-
-    if (comp != 0) INTERPOLATE(Position[0]);
-    if (comp != 1) INTERPOLATE(Position[1]);
-    if (comp != 2) INTERPOLATE(Position[2]);
-    INTERPOLATE(Position[3]);
-    outbuf->Position[comp] = plane*outbuf->Position[3];
-
-    if (attribs)
-    {
-        INTERPOLATE(Color[0]);
-        INTERPOLATE(Color[1]);
-        INTERPOLATE(Color[2]);
-
-        INTERPOLATE(TexCoords[0]);
-        INTERPOLATE(TexCoords[1]);
-    }
-
-    outbuf->Clipped = true;
-
-#undef INTERPOLATE
-}
-
-template<int comp, bool attribs>
-int ClipAgainstPlane(Vertex* vertices, int nverts, int clipstart)
-{
-    Vertex temp[10];
-    int prev, next;
-    int c = clipstart;
-
-    if (clipstart == 2)
-    {
-        temp[0] = vertices[0];
-        temp[1] = vertices[1];
-    }
-
-    for (int i = clipstart; i < nverts; i++)
-    {
-        prev = i-1; if (prev < 0) prev = nverts-1;
-        next = i+1; if (next >= nverts) next = 0;
-
-        Vertex vtx = vertices[i];
-        if (vtx.Position[comp] > vtx.Position[3])
-        {
-            if ((comp == 2) && (!(CurPolygonAttr & (1<<12)))) return 0;
-
-            Vertex* vprev = &vertices[prev];
-            if (vprev->Position[comp] <= vprev->Position[3])
-            {
-                ClipSegment<comp, 1, attribs>(&temp[c], &vtx, vprev);
-                c++;
-            }
-
-            Vertex* vnext = &vertices[next];
-            if (vnext->Position[comp] <= vnext->Position[3])
-            {
-                ClipSegment<comp, 1, attribs>(&temp[c], &vtx, vnext);
-                c++;
-            }
-        }
-        else
-            temp[c++] = vtx;
-    }
-
-    nverts = c; c = clipstart;
-    for (int i = clipstart; i < nverts; i++)
-    {
-        prev = i-1; if (prev < 0) prev = nverts-1;
-        next = i+1; if (next >= nverts) next = 0;
-
-        Vertex vtx = temp[i];
-        if (vtx.Position[comp] < -vtx.Position[3])
-        {
-            Vertex* vprev = &temp[prev];
-            if (vprev->Position[comp] >= -vprev->Position[3])
-            {
-                ClipSegment<comp, -1, attribs>(&vertices[c], &vtx, vprev);
-                c++;
-            }
-
-            Vertex* vnext = &temp[next];
-            if (vnext->Position[comp] >= -vnext->Position[3])
-            {
-                ClipSegment<comp, -1, attribs>(&vertices[c], &vtx, vnext);
-                c++;
-            }
-        }
-        else
-            vertices[c++] = vtx;
-    }
-
-    // checkme
-    for (int i = 0; i < c; i++)
-    {
-        Vertex* vtx = &vertices[i];
-
-        vtx->Color[0] &= ~0xFFF; vtx->Color[0] += 0xFFF;
-        vtx->Color[1] &= ~0xFFF; vtx->Color[1] += 0xFFF;
-        vtx->Color[2] &= ~0xFFF; vtx->Color[2] += 0xFFF;
-    }
-
-    return c;
-}
-
-template<bool attribs>
-int ClipPolygon(Vertex* vertices, int nverts, int clipstart)
-{
-    // clip.
-    // for each vertex:
-    // if it's outside, check if the previous and next vertices are inside
-    // if so, place a new vertex at the edge of the view volume
-
-    // TODO: check for 1-dot polygons
-    // TODO: the hardware seems to use a different algorithm. it reacts differently to vertices with W=0
-    // some vertices that should get Y=-0x1000 get Y=0x1000 for some reason on hardware. it doesn't make sense.
-    // clipping seems to process the Y plane before the X plane.
-
-    // Z clipping
-    nverts = ClipAgainstPlane<2, attribs>(vertices, nverts, clipstart);
-
-    // Y clipping
-    nverts = ClipAgainstPlane<1, attribs>(vertices, nverts, clipstart);
-
-    // X clipping
-    nverts = ClipAgainstPlane<0, attribs>(vertices, nverts, clipstart);
-
-    return nverts;
 }
 
 bool ClipCoordsEqual(Vertex* a, Vertex* b)
@@ -1463,16 +1188,29 @@ void SubmitPolygon()
         LastStripPolygon = NULL;
 }
 
+void FlushPendingVertices()
+{
+    /*TransformVertices(&TempVertexBuffer[PendingVerticesStart], NumPendingVertices);
+    PendingVerticesStart = VertexNumInPoly;
+    NumPendingVertices = 0;
+**/}
+
 void SubmitVertex()
 {
     s64 vertex[4] = {(s64)CurVertex[0], (s64)CurVertex[1], (s64)CurVertex[2], 0x1000};
     Vertex* vertextrans = &TempVertexBuffer[VertexNumInPoly];
 
+    vertextrans->Position[0] = CurVertex[0];
+    vertextrans->Position[1] = CurVertex[1];
+    vertextrans->Position[2] = CurVertex[2];
+
     UpdateClipMatrix();
-    vertextrans->Position[0] = (vertex[0]*ClipMatrix[0] + vertex[1]*ClipMatrix[4] + vertex[2]*ClipMatrix[8] + vertex[3]*ClipMatrix[12]) >> 12;
+    /*vertextrans->Position[0] = (vertex[0]*ClipMatrix[0] + vertex[1]*ClipMatrix[4] + vertex[2]*ClipMatrix[8] + vertex[3]*ClipMatrix[12]) >> 12;
     vertextrans->Position[1] = (vertex[0]*ClipMatrix[1] + vertex[1]*ClipMatrix[5] + vertex[2]*ClipMatrix[9] + vertex[3]*ClipMatrix[13]) >> 12;
     vertextrans->Position[2] = (vertex[0]*ClipMatrix[2] + vertex[1]*ClipMatrix[6] + vertex[2]*ClipMatrix[10] + vertex[3]*ClipMatrix[14]) >> 12;
-    vertextrans->Position[3] = (vertex[0]*ClipMatrix[3] + vertex[1]*ClipMatrix[7] + vertex[2]*ClipMatrix[11] + vertex[3]*ClipMatrix[15]) >> 12;
+    vertextrans->Position[3] = (vertex[0]*ClipMatrix[3] + vertex[1]*ClipMatrix[7] + vertex[2]*ClipMatrix[11] + vertex[3]*ClipMatrix[15]) >> 12;*/
+    TransformVertices(vertextrans, 1);
+
 
     // this probably shouldn't be.
     // the way color is handled during clipping needs investigation. TODO
@@ -1495,6 +1233,7 @@ void SubmitVertex()
 
     VertexNum++;
     VertexNumInPoly++;
+    NumPendingVertices++;
 
     switch (PolygonMode)
     {
@@ -1502,6 +1241,8 @@ void SubmitVertex()
         if (VertexNumInPoly == 3)
         {
             VertexNumInPoly = 0;
+            FlushPendingVertices();
+
             SubmitPolygon();
             NumConsecutivePolygons++;
         }
@@ -1511,6 +1252,8 @@ void SubmitVertex()
         if (VertexNumInPoly == 4)
         {
             VertexNumInPoly = 0;
+            FlushPendingVertices();
+
             SubmitPolygon();
             NumConsecutivePolygons++;
         }
@@ -1519,11 +1262,13 @@ void SubmitVertex()
     case 2: // triangle strip
         if (NumConsecutivePolygons & 1)
         {
+            VertexNumInPoly = 2;
+            FlushPendingVertices();
+
             Vertex tmp = TempVertexBuffer[1];
             TempVertexBuffer[1] = TempVertexBuffer[0];
             TempVertexBuffer[0] = tmp;
 
-            VertexNumInPoly = 2;
             SubmitPolygon();
             NumConsecutivePolygons++;
 
@@ -1532,6 +1277,8 @@ void SubmitVertex()
         else if (VertexNumInPoly == 3)
         {
             VertexNumInPoly = 2;
+            FlushPendingVertices();
+
             SubmitPolygon();
             NumConsecutivePolygons++;
 
@@ -1543,11 +1290,13 @@ void SubmitVertex()
     case 3: // quad strip
         if (VertexNumInPoly == 4)
         {
+            VertexNumInPoly = 2;
+            FlushPendingVertices();
+
             Vertex tmp = TempVertexBuffer[3];
             TempVertexBuffer[3] = TempVertexBuffer[2];
             TempVertexBuffer[2] = tmp;
 
-            VertexNumInPoly = 2;
             SubmitPolygon();
             NumConsecutivePolygons++;
 
@@ -2182,6 +1931,7 @@ void ExecuteCommand()
             NumConsecutivePolygons = 0;
             LastStripPolygon = NULL;
             CurPolygonAttr = PolygonAttr;
+            PendingVerticesStart = 0;
             break;
 
         case 0x41: // end polygons

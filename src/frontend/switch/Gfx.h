@@ -141,8 +141,8 @@ public:
 };
 
 extern dk::Device Device;
-extern dk::Queue Queue;
-extern dk::CmdBuf CmdBuf;
+extern dk::Queue PresentQueue, EmuQueue;
+extern dk::CmdBuf PresentCmdBuf, EmuCmdBuf;
 extern dk::Swapchain Swapchain;
 
 extern std::optional<GpuMemHeap> TextureHeap;
@@ -153,6 +153,7 @@ void Init();
 void DeInit();
 
 u32 TextureCreate(u32 width, u32 height, DkImageFormat format);
+u32 TextureCreateExternal(u32 width, u32 height, dk::Image& image);
 void TextureDelete(u32 idx);
 // this is meant to be used sparsely
 void TextureUpload(u32 idx, u32 x, u32 y, u32 width, u32 height, void* data, u32 dataStrideBytes);
@@ -178,15 +179,19 @@ enum
     sampler_ClampToEdge = 1 << 1,
 };
 
+void LoadShader(const char* path, dk::Shader& out);
+
 void StartFrame();
 void EndFrame(Color clearColor, int rotation);
 void SkipTimestep();
 
 void SetSampler(u32 sampler);
-void SetSmoothEdges(bool enabled);
 
 void PushScissor(u32 x, u32 y, u32 w, u32 h);
 void PopScissor();
+
+void WaitForFenceReady(dk::Fence& fence);
+void SignalFence(dk::Fence& fence);
 
 void DrawRectangle(Vector2f position, Vector2f size, Color tint, bool coolTransparency = false);
 void DrawRectangle(u32 texIdx,

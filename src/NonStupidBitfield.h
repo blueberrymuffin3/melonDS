@@ -29,6 +29,32 @@
 // like std::bitset but less stupid and optimised for 
 // our use case (keeping track of memory invalidations)
 
+inline u64 GetRangedBitMask(u32 idx, u32 startBit, u32 bitsCount)
+{
+    u32 startEntry = startBit >> 6;
+    u64 entriesCount = ((startBit + bitsCount + 0x3F) >> 6) - startEntry;
+
+    if (entriesCount > 1)
+    {
+        if (idx == startEntry)
+            return 0xFFFFFFFFFFFFFFFF << (startBit & 0x3F);
+        if (((startBit + bitsCount) & 0x3F) && idx == startEntry + entriesCount - 1)
+            return ~(0xFFFFFFFFFFFFFFFF << ((startBit + bitsCount) & 0x3F));
+        else
+            return 0xFFFFFFFFFFFFFFFF;
+
+        return 0xFFFFFFFFFFFFFFFF;
+    }
+    else if (idx == startEntry)
+    {
+        return ((1ULL << bitsCount) - 1) << (startBit & 0x3F);
+    }
+    else
+    {
+        return 0;
+    }
+}
+
 template <u32 Size>
 struct NonStupidBitField
 {
@@ -184,6 +210,26 @@ struct NonStupidBitField
         }
     }
 
+    int Min() const
+    {
+        for (int i = 0; i < DataLength; i++)
+        {
+            if (Data[i])
+                return i * 64 + __builtin_ctzll(Data[i]);
+        }
+        return -1;
+    }
+
+    int Max() const
+    {
+        for (int i = DataLength - 1; i >= 0; i--)
+        {
+            if (Data[i])
+                return i * 64 + (63 - __builtin_clzll(Data[i]));
+        }
+        return -1;
+    }
+
     NonStupidBitField& operator|=(const NonStupidBitField<Size>& other)
     {
         for (u32 i = 0; i < DataLength; i++)
@@ -208,6 +254,20 @@ struct NonStupidBitField
         if (Size > OtherSize)
             memset(Data + other.DataLength, 0, DataLength - other.DataLength);
         return *this;
+    }
+
+    operator bool()
+    {
+        for (int i = 0; i < DataLength - 1; i++)
+        {
+            if (Data[i])
+                return true;
+        }
+        if (Data[DataLength-1] & ((Size&0x3F) ? ~(0xFFFFFFFFFFFFFFFF << (Size&0x3F)) : 0xFFFFFFFFFFFFFFFF))
+        {
+            return true;
+        }
+        return false;
     }
 };
 

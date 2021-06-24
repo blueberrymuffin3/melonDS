@@ -29,7 +29,7 @@ public:
         Heap.Free(Mem);
     }
 
-    void Begin(dk::CmdBuf& cmdbuf)
+    u32 Begin(dk::CmdBuf& cmdbuf)
     {
         // Clear/reset the command buffer, which also destroys all command list handles
         // (but remember: it does *not* in fact destroy the command data)
@@ -41,6 +41,8 @@ public:
 
         // Feed the memory to the command buffer
         cmdbuf.addMemory(Heap.MemBlock, Mem.Offset + CurSlice * sliceSize, sliceSize);
+
+        return CurSlice;
     }
 
     DkCmdList End(dk::CmdBuf& cmdbuf)
