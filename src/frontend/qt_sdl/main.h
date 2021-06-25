@@ -55,6 +55,7 @@ public:
     void emuPause();
     void emuUnpause();
     void emuStop();
+    void emuFrameStep();
 
     bool emuIsRunning();
 
@@ -72,11 +73,12 @@ signals:
     void windowEmuStop();
     void windowEmuPause();
     void windowEmuReset();
+    void windowEmuFrameStep();
 
     void windowLimitFPSChange();
 
     void screenLayoutChange();
-    
+
     void windowFullscreenToggle();
 
     void swapScreensToggle();
@@ -118,7 +120,7 @@ protected:
     int numScreens;
 
     bool touching;
-    
+
     void showCursor();
 };
 
@@ -198,11 +200,12 @@ public:
 
     bool hasOGL;
     QOpenGLContext* getOGLContext();
-    
+
     void onAppStateChanged(Qt::ApplicationState state);
 
 protected:
     void resizeEvent(QResizeEvent* event) override;
+    void changeEvent(QEvent* event) override;
 
     void keyPressEvent(QKeyEvent* event) override;
     void keyReleaseEvent(QKeyEvent* event) override;
@@ -228,6 +231,7 @@ private slots:
     void onPause(bool checked);
     void onReset();
     void onStop();
+    void onFrameStep();
     void onEnableCheats(bool checked);
     void onSetupCheats();
     void onCheatsDialogFinished(int res);
@@ -265,7 +269,7 @@ private slots:
     void onEmuStop();
 
     void onUpdateVideoSettings(bool glchange);
-    
+
     void onFullscreenToggled();
 
 private:
@@ -280,8 +284,11 @@ private:
     void createScreenPanel();
 
     QString loadErrorStr(int error);
-    
+
     bool pausedManually;
+
+    int oldW, oldH;
+    bool oldMax;
 
 public:
     QWidget* panel;
@@ -300,6 +307,7 @@ public:
     QAction* actPause;
     QAction* actReset;
     QAction* actStop;
+    QAction* actFrameStep;
     QAction* actEnableCheats;
     QAction* actSetupCheats;
 
