@@ -334,6 +334,7 @@ void DekoRenderer::DrawScanline(u32 line, Unit* unit)
                 UploadVRAM(bgExtPalDirty, GPU::VRAMFlat_BBGExtPal, Gfx::TextureHeap->GpuAddr(PaletteTextureMemory) + paletteMemory_UnitSize + paletteMemory_BGExtPalOffset);
                 uploadBarrier = true;
             }
+
             auto objExtPalDirty = GPU::VRAMDirty_BOBJExtPal.DeriveState(&GPU::VRAMMap_BOBJExtPal);
             if (GPU::MakeVRAMFlat_BOBJExtPalCoherent(objExtPalDirty))
             {
@@ -461,6 +462,7 @@ void DekoRenderer::DrawScanline(u32 line, Unit* unit)
             EmuCmdBuf.signalFence(FramebufferReady[GPU::FrontBuffer^1]);
             EmuQueue.submitCommands(CmdMem.End(EmuCmdBuf));
             EmuQueue.flush();
+            UploadBuf.LastFlushBuffer = 0;
 
             CmdBufOpen = false;
 

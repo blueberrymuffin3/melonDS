@@ -29,7 +29,7 @@ public:
         Heap.Free(Mem);
     }
 
-    u32 Begin(dk::CmdBuf& cmdbuf)
+    u32 Begin(dk::CmdBuf cmdbuf)
     {
         // Clear/reset the command buffer, which also destroys all command list handles
         // (but remember: it does *not* in fact destroy the command data)
@@ -45,7 +45,7 @@ public:
         return CurSlice;
     }
 
-    DkCmdList End(dk::CmdBuf& cmdbuf)
+    DkCmdList End(dk::CmdBuf cmdbuf)
     {
         // Signal the fence corresponding to the current slice; so that in the future when we want
         // to use it again, we can wait for the completion of the commands we've just submitted

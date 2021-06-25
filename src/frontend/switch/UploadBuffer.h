@@ -14,8 +14,9 @@ public:
     void UploadAndCopyData(dk::CmdBuf cmdbuf, DkGpuAddr dst, u8* data, u32 size);
     void UploadAndCopyTexture(dk::CmdBuf cmdbuf, dk::Image& image, u8* data, u32 x, u32 y, u32 width, u32 height, u32 pitch);
 
+    u32 LastFlushBuffer = 0;
 private:
-    static const u32 SegmentSize = 6*1024*1024;
+    static const u32 SegmentSize = 8*1024*1024;
     GpuMemHeap::Allocation Buffers[3];
     dk::Fence Fences[3] = {};
     u32 CurBuffer = 0, CurOffset = 0;

@@ -1280,6 +1280,7 @@ void DekoRenderer::RenderFrame()
     DkCmdList cmdlist = CmdMem.End(EmuCmdBuf);
     EmuQueue.submitCommands(cmdlist);
     EmuQueue.flush();
+    UploadBuf.LastFlushBuffer = 0;
 
     /*u64 starttime = armGetSystemTick();
     EmuQueue.waitIdle();

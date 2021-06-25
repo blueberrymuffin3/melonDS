@@ -3,6 +3,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <assert.h>
 
 UploadBuffer::UploadBuffer()
 {
@@ -18,6 +19,8 @@ DkGpuAddr UploadBuffer::UploadData(dk::CmdBuf cmdbuf, u32 size, u8* data)
         CurOffset = 0;
         CurBuffer++;
         if (CurBuffer == 3) CurBuffer = 0;
+        LastFlushBuffer++;
+        assert(LastFlushBuffer <= 3);
         Fences[CurBuffer].wait();
     }
 
