@@ -189,6 +189,11 @@ struct NonStupidBitField
         return Ref{*this, idx};
     }
 
+    bool operator[](u32 idx) const
+    {
+        return Data[idx >> 6] & (1ULL << (idx & 0x3F));
+    }
+
     void SetRange(u32 startBit, u32 bitsCount)
     {
         u32 startEntry = startBit >> 6;

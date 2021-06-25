@@ -1281,7 +1281,7 @@ void DekoRenderer::FlushOBJDraw(u32 curline)
             u32 addr, strideShift = 0;
             int spriteKind;
             u32 prio = (attrib[2] >> 10) & 0x3;
-            u32 meta = (prio << 14) | 0x400000U;
+            u32 meta = (prio << 29) | 0x400000U;
             float depthKey = ((sprnum | (prio << 7)) / 512.f);
             //printf("depth key %f %d %d\n", depthKey, prio, sprnum);
 

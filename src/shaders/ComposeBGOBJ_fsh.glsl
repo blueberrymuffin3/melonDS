@@ -127,10 +127,10 @@ void main()
     if ((winAttr & (1U<<4)) == 0U)
         spriteLayer = 0U;
 
-    uint spritePrioMask = 1U << ((spriteLayer >> 14) & 0x3U);
+    uint spritePrioMask = 1U << ((spriteLayer >> 29) & 0x3U);
     if ((spriteLayer & 0xFF000000U) == 0)
         spritePrioMask = 0;
-    spriteLayer &= ~0xC000;
+    spriteLayer &= ~0x60000000U;
 
     uint layer0 = 0x20800000U, layer1 = 0x20800000U;
 
