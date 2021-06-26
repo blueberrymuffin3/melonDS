@@ -648,8 +648,6 @@ DekoRenderer::TexCacheEntry& DekoRenderer::GetTexture(u32 texParam, u32 palBase)
 
     TexCacheEntry entry = {0};
 
-    u32 textureData[width*height];
-
     entry.TextureRAMStart[0] = addr;
 
     // apparently a new texture
@@ -665,7 +663,7 @@ DekoRenderer::TexCacheEntry& DekoRenderer::GetTexture(u32 texParam, u32 palBase)
             RGB5ToRGB6(pixels.val[0], pixels.val[1], red, green, blue);
             uint8x16_t alpha = vbslq_u8(vtstq_u8(pixels.val[1], vdupq_n_u8(0x80)), vdupq_n_u8(0x1F), vdupq_n_u8(0));
 
-            vst4q_u8((u8*)&textureData[i],
+            vst4q_u8((u8*)&TextureDecodingBuffer[i],
             {
                 red,
                 green,
@@ -691,7 +689,7 @@ DekoRenderer::TexCacheEntry& DekoRenderer::GetTexture(u32 texParam, u32 palBase)
         entry.TexPalStart = palBase*16;
         entry.TexPalSize = 0x10000;
 
-        ConvertCompressedTexture<outputFmt_RGB6A5>(width, height, textureData, texData, texAuxData, palData);
+        ConvertCompressedTexture<outputFmt_RGB6A5>(width, height, TextureDecodingBuffer, texData, texAuxData, palData);
     }
     else
     {
@@ -707,6 +705,9 @@ DekoRenderer::TexCacheEntry& DekoRenderer::GetTexture(u32 texParam, u32 palBase)
 
         palAddr &= 0x1FFFF;
 
+        /*printf("creating texture | fmt: %d | %dx%d | %08x | %08x\n", fmt, width, height, addr, palAddr);
+        svcSleepThread(1000*1000);*/
+
         entry.TextureRAMSize[0] = texSize;
         entry.TexPalStart = palAddr;
         entry.TexPalSize = numPalEntries*2;
@@ -718,11 +719,11 @@ DekoRenderer::TexCacheEntry& DekoRenderer::GetTexture(u32 texParam, u32 palBase)
 
         switch (fmt)
         {
-        case 1: ConvertAXIYTexture<outputFmt_RGB6A5, 3, 5>(width, height, textureData, texData, palData); break;
-        case 6: ConvertAXIYTexture<outputFmt_RGB6A5, 5, 3>(width, height, textureData, texData, palData); break;
-        case 2: ConvertNColorsTexture<outputFmt_RGB6A5, 2>(width, height, textureData, texData, palData, color0Transparent); break;
-        case 3: Convert16ColorsTexture(width, height, textureData, texData, palData, color0Transparent); break;
-        case 4: ConvertNColorsTexture<outputFmt_RGB6A5, 8>(width, height, textureData, texData, palData, color0Transparent); break;
+        case 1: ConvertAXIYTexture<outputFmt_RGB6A5, 3, 5>(width, height, TextureDecodingBuffer, texData, palData); break;
+        case 6: ConvertAXIYTexture<outputFmt_RGB6A5, 5, 3>(width, height, TextureDecodingBuffer, texData, palData); break;
+        case 2: ConvertNColorsTexture<outputFmt_RGB6A5, 2>(width, height, TextureDecodingBuffer, texData, palData, color0Transparent); break;
+        case 3: Convert16ColorsTexture(width, height, TextureDecodingBuffer, texData, palData, color0Transparent); break;
+        case 4: ConvertNColorsTexture<outputFmt_RGB6A5, 8>(width, height, TextureDecodingBuffer, texData, palData, color0Transparent); break;
         }
     }
 
@@ -740,7 +741,7 @@ DekoRenderer::TexCacheEntry& DekoRenderer::GetTexture(u32 texParam, u32 palBase)
     entry.Memory = Gfx::TextureHeap->Alloc(imageLayout.getSize(), imageLayout.getAlignment());
     image.initialize(imageLayout, Gfx::TextureHeap->MemBlock, entry.Memory.Offset);
 
-    UploadBuf.UploadAndCopyTexture(Gfx::EmuCmdBuf, image, (u8*)textureData, 0, 0, width, height, width*4);
+    UploadBuf.UploadAndCopyTexture(Gfx::EmuCmdBuf, image, (u8*)TextureDecodingBuffer, 0, 0, width, height, width*4);
 
     dk::ImageDescriptor descriptor;
     descriptor.initialize(image);
@@ -748,11 +749,6 @@ DekoRenderer::TexCacheEntry& DekoRenderer::GetTexture(u32 texParam, u32 palBase)
     EmuCmdBuf.pushData(descriptors + (descriptorOffset_TexcacheStart + entry.ImageDescriptor) * sizeof(DkImageDescriptor),
         &descriptor,
         sizeof(DkImageDescriptor));
-
-    /*printf("creating texture | fmt: %d | %dx%d | %08x | %x, %x / %x, %x | %x, %x \n", fmt, width, height, addr,
-        entry.TextureRAMStart[0], entry.TextureRAMSize[0],
-        entry.TextureRAMStart[1], entry.TextureRAMSize[1],
-        entry.TexPalStart, entry.TexPalSize);*/
 
     return TexCache.emplace(std::make_pair(key, entry)).first->second;
 }

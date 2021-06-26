@@ -231,6 +231,8 @@ private:
     u32 FreeImageDescriptorsCount = 0;
     u32 FreeImageDescriptors[TexCacheMaxImages];
 
+    u32 TextureDecodingBuffer[1024*1024];
+
     TexCacheEntry& GetTexture(u32 textureParam, u32 paletteParam);
 
     void SetupAttrs(SpanSetupY* span, Polygon* poly, int from, int to);
