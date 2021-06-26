@@ -593,7 +593,6 @@ DekoRenderer::TexCacheEntry& DekoRenderer::GetTexture(u32 texParam, u32 palBase)
 
     u32 width = TextureWidth(texParam);
     u32 height = TextureHeight(texParam);
-    //height *= 2;
 
     u32 addr = (texParam & 0xFFFF) * 8;
 
@@ -778,7 +777,7 @@ void DekoRenderer::RenderFrame()
                 u64 entriesCount = ((startBit + bitsCount + 0x3F) >> 6) - startEntry;
                 for (u32 j = startEntry; j < startEntry + entriesCount; j++)
                 {
-                    if (GetRangedBitMask(j, startEntry, entriesCount) & texPalDirty.Data[j])
+                    if (GetRangedBitMask(j, startBit, bitsCount) & texPalDirty.Data[j])
                         goto invalidate;
                 }
             }
