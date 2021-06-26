@@ -1067,6 +1067,9 @@ void PlotTranslucent(inout uint color, inout uint depth, inout uint attr, bool i
         // le blend
         if (writeDepth)
             depth = tileDepth;
+
+        if ((attr & (1U<<15)) == 0)
+            blendAttr &= ~(1U<<15);
         attr = blendAttr;
 
         uint srcRB = tileColor & 0x3F003FU;
@@ -1302,19 +1305,19 @@ uint BlendFog(uint color, uint depth)
     uint density =
         ((ToonTable[densityid].g * (0x20000U-densityfrac)) +
          (ToonTable[densityid+1].g * densityfrac)) >> 17;
-    if (density >= 127U) density = 128U;
+    density = min(density, 128U);
 
     uint colorRB = color & 0x3F003FU;
     uint colorGA = (color >> 8) & 0x3F003FU;
 
     uint fogRB = FogColor & 0x3F003FU;
-    uint fogGA = (FogColor >> 8) & 0x3F003FU;
+    uint fogGA = (FogColor >> 8) & 0x1F003FU;
 
     uint finalColorRB = ((fogRB * density) + (colorRB * (128-density))) >> 7;
     uint finalColorGA = ((fogGA * density) + (colorGA * (128-density))) >> 7;
 
     finalColorRB &= 0x3F003FU;
-    finalColorGA &= 0x3F003FU;
+    finalColorGA &= 0x1F003FU;
 
     return (DispCnt & (1<<6)) != 0
         ? (bitfieldInsert(color, finalColorGA >> 16, 24, 8))
