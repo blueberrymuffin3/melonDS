@@ -379,6 +379,20 @@ inline void RGB5ToRGB6(uint8x16_t lo, uint8x16_t hi, uint8x16_t& red, uint8x16_t
     red = vandq_u8(vshlq_n_u8(lo, 1), vdupq_n_u8(0x3E));
     green = vbslq_u8(vdupq_n_u8(0xCE), vshrq_n_u8(lo, 4), vshlq_n_u8(hi, 4));
     blue = vandq_u8(vshrq_n_u8(hi, 1), vdupq_n_u8(0x3E));
+    red = vandq_u8(vtstq_u8(red, red), vaddq_u8(red, vdupq_n_u8(1)));
+    green = vandq_u8(vtstq_u8(green, green), vaddq_u8(green, vdupq_n_u8(1)));
+    blue =  vandq_u8(vtstq_u8(blue, blue), vaddq_u8(blue, vdupq_n_u8(1)));
+}
+
+inline void RGB5ToRGB6(uint8x8_t lo, uint8x8_t hi, uint8x8_t& red, uint8x8_t& green, uint8x8_t& blue)
+{
+    red   = vand_u8(vshl_n_u8(lo, 1), vdup_n_u8(0x3E));
+    green = vbsl_u8(vdup_n_u8(0xCE), vshr_n_u8(lo, 4), vshl_n_u8(hi, 4));
+    blue  = vand_u8(vshr_n_u8(hi, 1), vdup_n_u8(0x3E));
+
+    red   = vand_u8(vtst_u8(red, red), vadd_u8(red, vdup_n_u8(1)));
+    green = vand_u8(vtst_u8(green, green), vadd_u8(green, vdup_n_u8(1)));
+    blue  = vand_u8(vtst_u8(blue, blue), vadd_u8(blue, vdup_n_u8(1)));
 }
 
 inline u32 ConvertRGB5ToRGB8(u16 val)
@@ -539,6 +553,42 @@ void ConvertAXIYTexture(u32 width, u32 height, u32* output, u8* texData, u16* pa
     }
 }
 
+void Convert16ColorsTexture(u32 width, u32 height, u32* output, u8* texData, u16* palData, bool color0Transparent)
+{
+    uint8x16x2_t palette = vld2q_u8((u8*)palData);
+
+    uint8x16_t paletteR, paletteG, paletteB;
+    RGB5ToRGB6(palette.val[0], palette.val[1], paletteR, paletteG, paletteB);
+
+    uint8x16_t firstEntryAlpha = vdupq_n_u8(color0Transparent ? 0 : 0x1F);
+
+    for (int i = 0; i < width*height/2; i += 16)
+    {
+        uint8x16_t packedIndices = vld1q_u8(&texData[i]);
+
+        // unpack indices
+        uint8x16_t oddIndices = vandq_u8(packedIndices, vdupq_n_u8(0xF));
+        uint8x16_t evenIndices = vshrq_n_u8(packedIndices, 4);
+
+        uint8x16_t indices0 = vzip1q_u8(oddIndices, evenIndices);
+        uint8x16_t indices1 = vzip2q_u8(oddIndices, evenIndices);
+
+        // palettise
+        uint8x16x4_t finalPixels0, finalPixels1;
+        finalPixels0.val[0] = vqtbl1q_u8(paletteR, indices0);
+        finalPixels0.val[1] = vqtbl1q_u8(paletteG, indices0);
+        finalPixels0.val[2] = vqtbl1q_u8(paletteB, indices0);
+        finalPixels0.val[3] = vbslq_u8(vceqzq_u8(indices0), firstEntryAlpha, vdupq_n_u8(0x1F));
+        finalPixels1.val[0] = vqtbl1q_u8(paletteR, indices1);
+        finalPixels1.val[1] = vqtbl1q_u8(paletteG, indices1);
+        finalPixels1.val[2] = vqtbl1q_u8(paletteB, indices1);
+        finalPixels1.val[3] = vbslq_u8(vceqzq_u8(indices1), firstEntryAlpha, vdupq_n_u8(0x1F));
+
+        vst4q_u8((u8*)&output[i*2], finalPixels0);
+        vst4q_u8((u8*)&output[i*2+16], finalPixels1);
+    }
+}
+
 template <int outputFmt, int colorBits>
 void ConvertNColorsTexture(u32 width, u32 height, u32* output, u8* texData, u16* palData, bool color0Transparent)
 {
@@ -613,9 +663,6 @@ DekoRenderer::TexCacheEntry& DekoRenderer::GetTexture(u32 texParam, u32 palBase)
 
             uint8x16_t red, green, blue;
             RGB5ToRGB6(pixels.val[0], pixels.val[1], red, green, blue);
-            red = vandq_u8(vtstq_u8(red, red), vaddq_u8(red, vdupq_n_u8(1)));
-            green = vandq_u8(vtstq_u8(green, green), vaddq_u8(green, vdupq_n_u8(1)));
-            blue =  vandq_u8(vtstq_u8(blue, blue), vaddq_u8(blue, vdupq_n_u8(1)));
             uint8x16_t alpha = vbslq_u8(vtstq_u8(pixels.val[1], vdupq_n_u8(0x80)), vdupq_n_u8(0x1F), vdupq_n_u8(0));
 
             vst4q_u8((u8*)&textureData[i],
@@ -674,7 +721,7 @@ DekoRenderer::TexCacheEntry& DekoRenderer::GetTexture(u32 texParam, u32 palBase)
         case 1: ConvertAXIYTexture<outputFmt_RGB6A5, 3, 5>(width, height, textureData, texData, palData); break;
         case 6: ConvertAXIYTexture<outputFmt_RGB6A5, 5, 3>(width, height, textureData, texData, palData); break;
         case 2: ConvertNColorsTexture<outputFmt_RGB6A5, 2>(width, height, textureData, texData, palData, color0Transparent); break;
-        case 3: ConvertNColorsTexture<outputFmt_RGB6A5, 4>(width, height, textureData, texData, palData, color0Transparent); break;
+        case 3: Convert16ColorsTexture(width, height, textureData, texData, palData, color0Transparent); break;
         case 4: ConvertNColorsTexture<outputFmt_RGB6A5, 8>(width, height, textureData, texData, palData, color0Transparent); break;
         }
     }
