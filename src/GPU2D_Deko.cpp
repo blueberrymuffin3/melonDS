@@ -1689,7 +1689,7 @@ void DekoRenderer::ComposeBGOBJ()
         {
             // insert all the sprites which come before the bg with the lowest priority
             composeUniform.BGSpriteMasks[0] = 0;
-            for (int i = 0; i < curPrio; i++)
+            for (int i = 3; i > curPrio; i--)
                 composeUniform.BGSpriteMasks[0] |= 1 << i;
         }
 
