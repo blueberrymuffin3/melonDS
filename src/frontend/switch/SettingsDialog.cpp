@@ -330,7 +330,7 @@ void DoGui(BoxGui::Frame& parent)
 
             DoCombobox(settingsFrame, settingsSkewer, "Rotation", "0°\090°\000180°\000270°\0", Config::ScreenRotation, true);
             DoCombobox(settingsFrame, settingsSkewer, "Sizing", "Even\0Emphasise top\0Emphasise bottom\0Auto\0Top only\0Bottom only\0", Config::ScreenSizing);
-            DoCombobox(settingsFrame, settingsSkewer, "Gap", "0px\0001px\08px\00064px\090px\000128px\0", Config::ScreenGap);
+            DoCombobox(settingsFrame, settingsSkewer, "Gap", "0\0001\08\00016\00032\00064\0090\000128\0", Config::ScreenGap);
             DoCombobox(settingsFrame, settingsSkewer, "Layout", "Natural\0Vertical\0Horizontal\0Hybrid\0", Config::ScreenLayout);
             DoCombobox(settingsFrame, settingsSkewer, "Aspect ratio top", "4:3 (native)\00016:9\0", Config::ScreenAspectTop);
             DoCombobox(settingsFrame, settingsSkewer, "Aspect ratio bottom", "4:3 (native)\00016:9\0", Config::ScreenAspectBot);

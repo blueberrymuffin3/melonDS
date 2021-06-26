@@ -894,7 +894,7 @@ void UpdateScreenLayout()
     float invTouchScale = 720.f / screenHeight;
     if ((Config::GlobalRotation % 2) == 1)
         std::swap(screenWidth, screenHeight);
-    const int screengap[] = {0, 1, 8, 64, 90, 128};
+    const int screengap[] = {0, 1, 8, 16, 32, 64, 90, 128};
     const float aspectratios[] = {1, (16.f/9.f)/(4.f/3.f)};
     Frontend::SetupScreenLayout(screenWidth, screenHeight,
         Config::ScreenLayout,
