@@ -82,7 +82,6 @@ private:
         descriptorOffset_DirectBitmap = descriptorOffset_Palettes+2,
         descriptorOffset_3DFramebuffer = descriptorOffset_DirectBitmap+2,
         descriptorOffset_OBJWindow,
-        descriptorOffset_BGOBJ,
         descriptorOffset_Count = descriptorOffset_OBJWindow+2
     };
     GpuMemHeap::Allocation ImageDescriptors;

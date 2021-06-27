@@ -139,7 +139,6 @@ DekoRenderer::DekoRenderer() :
         imageDescriptors[descriptorOffset_OBJWindow+i].initialize(dk::ImageView{OBJWindow[i]});
     }
     imageDescriptors[descriptorOffset_3DFramebuffer].initialize(dk::ImageView{_3DFramebuffer});
-    imageDescriptors[descriptorOffset_BGOBJ].initialize(dk::ImageView{BGOBJTexture});
 
     SamplerDescriptors = Gfx::DataHeap->Alloc(sizeof(dk::SamplerDescriptor), DK_SAMPLER_DESCRIPTOR_ALIGNMENT);
     Gfx::DataHeap->CpuAddr<dk::SamplerDescriptor>(SamplerDescriptors)->initialize(dk::Sampler{});
