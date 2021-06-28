@@ -196,7 +196,7 @@ layout (std140, binding = 0) uniform MetaUniform
 
     uint FogOffset, FogShift, FogColor;
 
-    uint PolygonVisible;
+    int XScroll;
 
     // only used/updated for rasteriation
     uint CurVariant;
@@ -1319,18 +1319,25 @@ uint BlendFog(uint color, uint depth)
     finalColorRB &= 0x3F003FU;
     finalColorGA &= 0x1F003FU;
 
-    return (DispCnt & (1<<6)) != 0
+    return (DispCnt & (1U<<6)) != 0
         ? (bitfieldInsert(color, finalColorGA >> 16, 24, 8))
         : (finalColorRB | (finalColorGA << 8));
 }
 
 void main()
 {
-    int resultOffset = int(gl_GlobalInvocationID.x) + int(gl_GlobalInvocationID.y) * 256;
+    int srcX = (int(gl_GlobalInvocationID.x) + XScroll) & 0x1FF;
+    int resultOffset = int(srcX) + int(gl_GlobalInvocationID.y) * 256;
 
-    uvec2 color = uvec2(ColorResult[resultOffset], ColorResult[resultOffset+FramebufferStride]);
-    uvec2 depth = uvec2(DepthResult[resultOffset], DepthResult[resultOffset+FramebufferStride]);
-    uvec2 attr = uvec2(AttrResult[resultOffset], AttrResult[resultOffset+FramebufferStride]);
+    uvec2 color = uvec2(0);
+    uvec2 depth = uvec2(0);
+    uvec2 attr = uvec2(0);
+    if (srcX < 256)
+    {
+        color = uvec2(ColorResult[resultOffset], ColorResult[resultOffset+FramebufferStride]);
+        depth = uvec2(DepthResult[resultOffset], DepthResult[resultOffset+FramebufferStride]);
+        attr = uvec2(AttrResult[resultOffset], AttrResult[resultOffset+FramebufferStride]);
+    }
 
 #ifdef EdgeMarking
     if ((attr.x & 0xFU) != 0U)
@@ -1338,12 +1345,12 @@ void main()
         uvec4 otherAttr = uvec4(ClearAttr);
         uvec4 otherDepth = uvec4(ClearDepth);
 
-        if (gl_GlobalInvocationID.x > 0U)
+        if (srcX > 0U)
         {
             otherAttr.x = AttrResult[resultOffset-1];
             otherDepth.x = DepthResult[resultOffset-1];
         }
-        if (gl_GlobalInvocationID.x < 255U)
+        if (srcX < 255U)
         {
             otherAttr.y = AttrResult[resultOffset+1];
             otherDepth.y = DepthResult[resultOffset+1];

@@ -1197,7 +1197,7 @@ void DekoRenderer::RenderFrame()
         u32 fogA = (RenderFogColor >> 16) & 0x1F;
         meta.FogColor = fogR | (fogG << 8) | (fogB << 16) | (fogA << 24);
     }
-    meta.PolygonVisible = visiblePolygon;
+    meta.XScroll = RenderXPos;
     EmuCmdBuf.bindUniformBuffer(DkStage_Compute, 0, Gfx::DataHeap->GpuAddr(MetaUniformMemory), MetaUniformSize);
     EmuCmdBuf.pushConstants(gpuAddrMetaUniform, MetaUniformSize, 0, sizeof(MetaUniform), &meta);
 

@@ -81,7 +81,7 @@ private:
 
         u32 FogOffset, FogShift, FogColor;
 
-        u32 PolygonVisible;
+        u32 XScroll;
         // only used/updated for rasteriation
         u32 CurVariant;
         float InvTextureSize[2];
