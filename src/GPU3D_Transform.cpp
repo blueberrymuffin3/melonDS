@@ -250,18 +250,15 @@ int ClipPolygon(Vertex* vertices, int nverts, int clipstart)
     return nverts;
 }
 
-void TransformVertices(Vertex* vertices, int num)
+void TransformVertex(s16* inVertex, s32* outVertex)
 {
-    for (int i = 0; i < num; i++)
-    {
-        s64 x = vertices[i].Position[0];
-        s64 y = vertices[i].Position[1];
-        s64 z = vertices[i].Position[2];
-        vertices[i].Position[0] = ((x*ClipMatrix[0] + y*ClipMatrix[4] + z*ClipMatrix[8]) >> 12) + ClipMatrix[12];
-        vertices[i].Position[1] = ((x*ClipMatrix[1] + y*ClipMatrix[5] + z*ClipMatrix[9]) >> 12) + ClipMatrix[13];
-        vertices[i].Position[2] = ((x*ClipMatrix[2] + y*ClipMatrix[6] + z*ClipMatrix[10]) >> 12) + ClipMatrix[14];
-        vertices[i].Position[3] = ((x*ClipMatrix[3] + y*ClipMatrix[7] + z*ClipMatrix[11]) >> 12) + ClipMatrix[15];
-    }
+    s64 x = input[0];
+    s64 y = input[1];
+    s64 z = input[2];
+    outVertex[0] = ((x*ClipMatrix[0] + y*ClipMatrix[4] + z*ClipMatrix[8]) >> 12) + ClipMatrix[12];
+    outVertex[1] = ((x*ClipMatrix[1] + y*ClipMatrix[5] + z*ClipMatrix[9]) >> 12) + ClipMatrix[13];
+    outVertex[2] = ((x*ClipMatrix[2] + y*ClipMatrix[6] + z*ClipMatrix[10]) >> 12) + ClipMatrix[14];
+    outVertex[3] = ((x*ClipMatrix[3] + y*ClipMatrix[7] + z*ClipMatrix[11]) >> 12) + ClipMatrix[15];
 }
 
 #else
@@ -500,23 +497,20 @@ int ClipPolygon(Vertex* vertices, int nverts, int clipstart)
     return nverts;
 }
 
-void TransformVertices(Vertex* vertices, int num)
+void TransformVertex(s16* inVertex, s32* outVertex)
 {
     int32x4x4_t clipmat = vld1q_s32_x4(ClipMatrix);
 
-    for (int i = 0; i < num; i++)
-    {
-        int32x4_t vertex = vld1q_s32(vertices[i].Position);
+    int32x4_t vertex = vmovl_s16(vld1_s16(inVertex));
 
-        int64x2_t accum0 = vmull_laneq_s32(vget_low_s32(clipmat.val[0]), vertex, 0);
-        accum0 = vmlal_laneq_s32(accum0, vget_low_s32(clipmat.val[1]), vertex, 1);
-        accum0 = vmlal_laneq_s32(accum0, vget_low_s32(clipmat.val[2]), vertex, 2);
-        int64x2_t accum1 = vmull_high_laneq_s32(clipmat.val[0], vertex, 0);
-        accum1 = vmlal_high_laneq_s32(accum1, clipmat.val[1], vertex, 1);
-        accum1 = vmlal_high_laneq_s32(accum1, clipmat.val[2], vertex, 2);
+    int64x2_t accum0 = vmull_laneq_s32(vget_low_s32(clipmat.val[0]), vertex, 0);
+    accum0 = vmlal_laneq_s32(accum0, vget_low_s32(clipmat.val[1]), vertex, 1);
+    accum0 = vmlal_laneq_s32(accum0, vget_low_s32(clipmat.val[2]), vertex, 2);
+    int64x2_t accum1 = vmull_high_laneq_s32(clipmat.val[0], vertex, 0);
+    accum1 = vmlal_high_laneq_s32(accum1, clipmat.val[1], vertex, 1);
+    accum1 = vmlal_high_laneq_s32(accum1, clipmat.val[2], vertex, 2);
 
-        vst1q_s32(vertices[i].Position, vaddq_s32(vshrn_high_n_s64(vshrn_n_s64(accum0, 12), accum1, 12), clipmat.val[3]));
-    }
+    vst1q_s32(outVertex, vaddq_s32(vshrn_high_n_s64(vshrn_n_s64(accum0, 12), accum1, 12), clipmat.val[3]));
 }
 
 #endif

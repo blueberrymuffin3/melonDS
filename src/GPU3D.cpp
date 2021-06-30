@@ -286,7 +286,7 @@ void MatrixTranslate(s32* m, s32* s);
 template<bool attribs>
 int ClipPolygon(Vertex* vertices, int nverts, int clipstart);
 
-void TransformVertices(Vertex* vertices, int num);
+void TransformVertex(s16* inVertex, s32* outVertex);
 
 bool Init()
 {
@@ -1188,29 +1188,13 @@ void SubmitPolygon()
         LastStripPolygon = NULL;
 }
 
-void FlushPendingVertices()
-{
-    /*TransformVertices(&TempVertexBuffer[PendingVerticesStart], NumPendingVertices);
-    PendingVerticesStart = VertexNumInPoly;
-    NumPendingVertices = 0;
-**/}
 
 void SubmitVertex()
 {
-    s64 vertex[4] = {(s64)CurVertex[0], (s64)CurVertex[1], (s64)CurVertex[2], 0x1000};
     Vertex* vertextrans = &TempVertexBuffer[VertexNumInPoly];
 
-    vertextrans->Position[0] = CurVertex[0];
-    vertextrans->Position[1] = CurVertex[1];
-    vertextrans->Position[2] = CurVertex[2];
-
     UpdateClipMatrix();
-    /*vertextrans->Position[0] = (vertex[0]*ClipMatrix[0] + vertex[1]*ClipMatrix[4] + vertex[2]*ClipMatrix[8] + vertex[3]*ClipMatrix[12]) >> 12;
-    vertextrans->Position[1] = (vertex[0]*ClipMatrix[1] + vertex[1]*ClipMatrix[5] + vertex[2]*ClipMatrix[9] + vertex[3]*ClipMatrix[13]) >> 12;
-    vertextrans->Position[2] = (vertex[0]*ClipMatrix[2] + vertex[1]*ClipMatrix[6] + vertex[2]*ClipMatrix[10] + vertex[3]*ClipMatrix[14]) >> 12;
-    vertextrans->Position[3] = (vertex[0]*ClipMatrix[3] + vertex[1]*ClipMatrix[7] + vertex[2]*ClipMatrix[11] + vertex[3]*ClipMatrix[15]) >> 12;*/
-    TransformVertices(vertextrans, 1);
-
+    TransformVertex(CurVertex, vertextrans->Position);
 
     // this probably shouldn't be.
     // the way color is handled during clipping needs investigation. TODO
@@ -1220,8 +1204,11 @@ void SubmitVertex()
 
     if ((TexParam >> 30) == 3)
     {
-        vertextrans->TexCoords[0] = ((vertex[0]*TexMatrix[0] + vertex[1]*TexMatrix[4] + vertex[2]*TexMatrix[8]) >> 24) + RawTexCoords[0];
-        vertextrans->TexCoords[1] = ((vertex[0]*TexMatrix[1] + vertex[1]*TexMatrix[5] + vertex[2]*TexMatrix[9]) >> 24) + RawTexCoords[1];
+        s32 x = CurVertex[0];
+        s32 y = CurVertex[1];
+        s32 z = CurVertex[2];
+        vertextrans->TexCoords[0] = ((x*TexMatrix[0] + y*TexMatrix[4] + z*TexMatrix[8]) >> 24) + RawTexCoords[0];
+        vertextrans->TexCoords[1] = ((x*TexMatrix[1] + y*TexMatrix[5] + z*TexMatrix[9]) >> 24) + RawTexCoords[1];
     }
     else
     {
@@ -1241,8 +1228,6 @@ void SubmitVertex()
         if (VertexNumInPoly == 3)
         {
             VertexNumInPoly = 0;
-            FlushPendingVertices();
-
             SubmitPolygon();
             NumConsecutivePolygons++;
         }
@@ -1252,8 +1237,6 @@ void SubmitVertex()
         if (VertexNumInPoly == 4)
         {
             VertexNumInPoly = 0;
-            FlushPendingVertices();
-
             SubmitPolygon();
             NumConsecutivePolygons++;
         }
@@ -1262,13 +1245,11 @@ void SubmitVertex()
     case 2: // triangle strip
         if (NumConsecutivePolygons & 1)
         {
-            VertexNumInPoly = 2;
-            FlushPendingVertices();
-
             Vertex tmp = TempVertexBuffer[1];
             TempVertexBuffer[1] = TempVertexBuffer[0];
             TempVertexBuffer[0] = tmp;
 
+            VertexNumInPoly = 2;
             SubmitPolygon();
             NumConsecutivePolygons++;
 
@@ -1277,8 +1258,6 @@ void SubmitVertex()
         else if (VertexNumInPoly == 3)
         {
             VertexNumInPoly = 2;
-            FlushPendingVertices();
-
             SubmitPolygon();
             NumConsecutivePolygons++;
 
@@ -1290,13 +1269,11 @@ void SubmitVertex()
     case 3: // quad strip
         if (VertexNumInPoly == 4)
         {
-            VertexNumInPoly = 2;
-            FlushPendingVertices();
-
             Vertex tmp = TempVertexBuffer[3];
             TempVertexBuffer[3] = TempVertexBuffer[2];
             TempVertexBuffer[2] = tmp;
 
+            VertexNumInPoly = 2;
             SubmitPolygon();
             NumConsecutivePolygons++;
 
@@ -1405,27 +1382,21 @@ void BoxTest(u32* params)
     y1 += y0;
     z1 += z0;
 
-    cube[0].Position[0] = x0; cube[0].Position[1] = y0; cube[0].Position[2] = z0;
-    cube[1].Position[0] = x1; cube[1].Position[1] = y0; cube[1].Position[2] = z0;
-    cube[2].Position[0] = x1; cube[2].Position[1] = y1; cube[2].Position[2] = z0;
-    cube[3].Position[0] = x0; cube[3].Position[1] = y1; cube[3].Position[2] = z0;
-    cube[4].Position[0] = x0; cube[4].Position[1] = y1; cube[4].Position[2] = z1;
-    cube[5].Position[0] = x0; cube[5].Position[1] = y0; cube[5].Position[2] = z1;
-    cube[6].Position[0] = x1; cube[6].Position[1] = y0; cube[6].Position[2] = z1;
-    cube[7].Position[0] = x1; cube[7].Position[1] = y1; cube[7].Position[2] = z1;
+    s16 positions[] =
+    {
+        x0, y0, z0,
+        x1, y0, z0,
+        x1, y1, z0,
+        x0, y1, z0,
+        x0, y1, z1,
+        x0, y0, z1,
+        x1, y0, z1,
+        x1, y1, z1,
+    };
 
     UpdateClipMatrix();
     for (int i = 0; i < 8; i++)
-    {
-        s32 x = cube[i].Position[0];
-        s32 y = cube[i].Position[1];
-        s32 z = cube[i].Position[2];
-
-        cube[i].Position[0] = ((s64)x*ClipMatrix[0] + (s64)y*ClipMatrix[4] + (s64)z*ClipMatrix[8] + (s64)0x1000*ClipMatrix[12]) >> 12;
-        cube[i].Position[1] = ((s64)x*ClipMatrix[1] + (s64)y*ClipMatrix[5] + (s64)z*ClipMatrix[9] + (s64)0x1000*ClipMatrix[13]) >> 12;
-        cube[i].Position[2] = ((s64)x*ClipMatrix[2] + (s64)y*ClipMatrix[6] + (s64)z*ClipMatrix[10] + (s64)0x1000*ClipMatrix[14]) >> 12;
-        cube[i].Position[3] = ((s64)x*ClipMatrix[3] + (s64)y*ClipMatrix[7] + (s64)z*ClipMatrix[11] + (s64)0x1000*ClipMatrix[15]) >> 12;
-    }
+        TransformVertex(&positions[i*3], cube[i].Position);
 
     // front face (-Z)
     face[0] = cube[0]; face[1] = cube[1]; face[2] = cube[2]; face[3] = cube[3];
@@ -1487,10 +1458,7 @@ void PosTest()
     s64 vertex[4] = {(s64)CurVertex[0], (s64)CurVertex[1], (s64)CurVertex[2], 0x1000};
 
     UpdateClipMatrix();
-    PosTestResult[0] = (vertex[0]*ClipMatrix[0] + vertex[1]*ClipMatrix[4] + vertex[2]*ClipMatrix[8] + vertex[3]*ClipMatrix[12]) >> 12;
-    PosTestResult[1] = (vertex[0]*ClipMatrix[1] + vertex[1]*ClipMatrix[5] + vertex[2]*ClipMatrix[9] + vertex[3]*ClipMatrix[13]) >> 12;
-    PosTestResult[2] = (vertex[0]*ClipMatrix[2] + vertex[1]*ClipMatrix[6] + vertex[2]*ClipMatrix[10] + vertex[3]*ClipMatrix[14]) >> 12;
-    PosTestResult[3] = (vertex[0]*ClipMatrix[3] + vertex[1]*ClipMatrix[7] + vertex[2]*ClipMatrix[11] + vertex[3]*ClipMatrix[15]) >> 12;
+    TransformVertex(CurVertex, PosTestResult);
 
     AddCycles(5);
 }
