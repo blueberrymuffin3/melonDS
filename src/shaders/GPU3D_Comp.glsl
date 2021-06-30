@@ -931,16 +931,16 @@ void main()
             }
 
             uint z;
-            int u, v, r, g, b, a;
+            int u, v, vr, vg, vb;
 
             if (xspan.X0 == xspan.X1)
             {
                 z = xspan.Z0;
                 u = xspan.TexcoordU0;
                 v = xspan.TexcoordV0;
-                r = xspan.ColorR0;
-                g = xspan.ColorG0;
-                b = xspan.ColorB0;
+                vr = xspan.ColorR0;
+                vg = xspan.ColorG0;
+                vb = xspan.ColorB0;
             }
             else
             {
@@ -959,42 +959,46 @@ void main()
                     u = InterpolateAttrPersp(xspan.TexcoordU0, xspan.TexcoordU1, ifactor);
                     v = InterpolateAttrPersp(xspan.TexcoordV0, xspan.TexcoordV1, ifactor);
 
-                    r = InterpolateAttrPersp(xspan.ColorR0, xspan.ColorR1, ifactor);
-                    g = InterpolateAttrPersp(xspan.ColorG0, xspan.ColorG1, ifactor);
-                    b = InterpolateAttrPersp(xspan.ColorB0, xspan.ColorB1, ifactor);
+                    vr = InterpolateAttrPersp(xspan.ColorR0, xspan.ColorR1, ifactor);
+                    vg = InterpolateAttrPersp(xspan.ColorG0, xspan.ColorG1, ifactor);
+                    vb = InterpolateAttrPersp(xspan.ColorB0, xspan.ColorB1, ifactor);
                 }
                 else
                 {
                     u = InterpolateAttrLinear(xspan.TexcoordU0, xspan.TexcoordU1, i, xspan.XRecip, idiff);
                     v = InterpolateAttrLinear(xspan.TexcoordV0, xspan.TexcoordV1, i, xspan.XRecip, idiff);
 
-                    r = InterpolateAttrLinear(xspan.ColorR0, xspan.ColorR1, i, xspan.XRecip, idiff);
-                    g = InterpolateAttrLinear(xspan.ColorG0, xspan.ColorG1, i, xspan.XRecip, idiff);
-                    b = InterpolateAttrLinear(xspan.ColorB0, xspan.ColorB1, i, xspan.XRecip, idiff);
+                    vr = InterpolateAttrLinear(xspan.ColorR0, xspan.ColorR1, i, xspan.XRecip, idiff);
+                    vg = InterpolateAttrLinear(xspan.ColorG0, xspan.ColorG1, i, xspan.XRecip, idiff);
+                    vb = InterpolateAttrLinear(xspan.ColorB0, xspan.ColorB1, i, xspan.XRecip, idiff);
                 }
             }
 
 #ifndef ShadowMask
-            r >>= 3;
-            g >>= 3;
-            b >>= 3;
+            vr >>= 3;
+            vg >>= 3;
+            vb >>= 3;
 
+            uint r, g, b, a;
             uint polyalpha = bitfieldExtract(polygon.Attr, 16, 5);
 
 #ifdef Toon
-            uint tooncolor = ToonTable[r >> 1].r;
-            r = int(bitfieldExtract(tooncolor, 0, 8));
-            g = int(bitfieldExtract(tooncolor, 8, 8));
-            b = int(bitfieldExtract(tooncolor, 16, 8));
+            uint tooncolor = ToonTable[vr >> 1].r;
+            vr = int(bitfieldExtract(tooncolor, 0, 8));
+            vg = int(bitfieldExtract(tooncolor, 8, 8));
+            vb = int(bitfieldExtract(tooncolor, 16, 8));
 #endif
 #ifdef Highlight
-            g = r;
-            b = r;
+            vg = vr;
+            vb = vr;
 #endif
 
 #ifdef NoTexture
             a = int(polyalpha);
 #endif
+            r = vr;
+            g = vg;
+            b = vb;
 
 #ifdef UseTexture
             vec2 uvf = vec2(ivec2(u, v)) * vec2(1.0 / 16.0) * InvTextureSize;
@@ -1009,27 +1013,28 @@ void main()
             }
             else if (texcolor.a > 0)
             {
-                r = int((texcolor.r * texcolor.a) + (r * (31-texcolor.a))) >> 5;
-                g = int((texcolor.g * texcolor.a) + (g * (31-texcolor.a))) >> 5;
-                b = int((texcolor.b * texcolor.a) + (b * (31-texcolor.a))) >> 5;
+                r = int((texcolor.r * texcolor.a) + (vr * (31-texcolor.a))) >> 5;
+                g = int((texcolor.g * texcolor.a) + (vg * (31-texcolor.a))) >> 5;
+                b = int((texcolor.b * texcolor.a) + (vb * (31-texcolor.a))) >> 5;
             }
             a = int(polyalpha);
 #endif
 #if defined(Modulate) || defined(Toon) || defined(Highlight)
-            r = int((texcolor.r+1) * (r+1) - 1) >> 6;
-            g = int((texcolor.g+1) * (g+1) - 1) >> 6;
-            b = int((texcolor.b+1) * (b+1) - 1) >> 6;
+            r = int((texcolor.r+1) * (vr+1) - 1) >> 6;
+            g = int((texcolor.g+1) * (vg+1) - 1) >> 6;
+            b = int((texcolor.b+1) * (vb+1) - 1) >> 6;
             a = int((texcolor.a+1) * (polyalpha+1) - 1) >> 5;
 #endif
 #endif
 
 #ifdef Highlight
-            uint tooncolor = ToonTable[r >> 1].r;
+            uint tooncolor = ToonTable[vr >> 1].r;
 
             r = min(r + int(bitfieldExtract(tooncolor, 0, 8)), 63);
             g = min(g + int(bitfieldExtract(tooncolor, 8, 8)), 63);
             b = min(b + int(bitfieldExtract(tooncolor, 16, 8)), 63);
 #endif
+
             if (polyalpha == 0)
                 a = 31;
 
