@@ -2,6 +2,8 @@
 
 #include <deko3d.hpp>
 
+#include <vector>
+
 #include "frontend/switch/GpuMemHeap.h"
 #include "frontend/switch/CmdMemRing.h"
 #include "frontend/switch/UploadBuffer.h"
@@ -64,6 +66,9 @@ private:
     dk::Image OBJWindow[2];
     GpuMemHeap::Allocation OBJWindowMemory;
 
+    dk::Image DisabledBG;
+    GpuMemHeap::Allocation DisabledBGMemory;
+
     enum
     {
         textureVRAM_ABG,
@@ -81,6 +86,7 @@ private:
         descriptorOffset_Palettes = descriptorOffset_VRAM16+textureVRAM_Count,
         descriptorOffset_DirectBitmap = descriptorOffset_Palettes+2,
         descriptorOffset_3DFramebuffer = descriptorOffset_DirectBitmap+2,
+        descriptorOffset_DisabledBG,
         descriptorOffset_OBJWindow,
         descriptorOffset_Count = descriptorOffset_OBJWindow+2
     };
@@ -124,7 +130,6 @@ private:
     dk::Shader ShaderOBJBitmap;
     dk::Shader ShaderOBJWindow4bpp;
     dk::Shader ShaderOBJWindow8bpp;
-    dk::Shader ShaderBlah;
 
     CmdMemRing<8> CmdMem;
 
@@ -186,14 +191,37 @@ private:
     BGUniform BGTextUniforms[2][4];
     const u32 BGUniformSize = (sizeof(BGUniform) + DK_UNIFORM_BUF_ALIGNMENT - 1) & ~(DK_UNIFORM_BUF_ALIGNMENT - 1);
 
+    struct ComposeRegion
+    {
+        u32 StdPalDst, BGExtPalDst, OBJExtPalDst;
+        DkGpuAddr StdPalSrc, BGExtPalSrc, OBJExtPalSrc;
+        u32 StdPalSize, BGExtPalSize, OBJExtPalSize;
+
+        u32 LinesCount;
+
+        bool ForceBlank;
+        u32 DispCnt;
+        u16 BGCnt[4];
+
+        u16 BlendCnt;
+        u16 MasterBrightness;
+        u8 EVA, EVB, EVY;
+    };
+
+    std::vector<ComposeRegion> ComposeRegions[2];
+
     void DoCapture();
 
     template <u32 Size>
     void UploadVRAM(const NonStupidBitField<Size>& dirty, u8* src, DkGpuAddr dst);
+    template <u32 Size>
+    void UploadPalVRAM(const NonStupidBitField<Size>& dirty, u8* dataSrc, u32& dst, DkGpuAddr& src, u32& size);
 
     void FlushBGDraw(u32 curline, u32 bgmask);
     void FlushOBJDraw(u32 curline);
+    void FillinCurComposeRegion(ComposeRegion& out);
     void ComposeBGOBJ();
+
 
     bool CmdBufOpen = false;
 
@@ -211,12 +239,22 @@ private:
 
     u16 LastBGXPos[2][4];
     u16 LastBGYPos[2][4];
+    s32 LastBGXRef[2][2];
+    s32 LastBGYRef[2][2];
     s16 LastBGRotA[2][2];
     s16 LastBGRotB[2][2];
     s16 LastBGRotC[2][2];
     s16 LastBGRotD[2][2];
     u32 LastDispCnt[2];
     u16 LastBGCnt[2][4];
+
+    u16 LastBlendCnt[2];
+    u16 LastMasterBrightness[2];
+    u8 LastEVA[2], LastEVB[2], LastEVY[2];
+
+    bool LastForceBlank[2];
+
+    bool DirectBitmapNeeded[2];
 
     u16 DirectBitmap[2][256*192];
 

@@ -123,6 +123,15 @@ DekoRenderer::DekoRenderer() :
 
     DisplayCaptureMemory = Gfx::DataHeap->Alloc(256*192*4, 64);
 
+    dk::ImageLayout disabledBGLayout;
+    dk::ImageLayoutMaker{Gfx::Device}
+        .setType(DkImageType_2D)
+        .setDimensions(8, 8)
+        .setFormat(DkImageFormat_R8_Uint)
+        .initialize(disabledBGLayout);
+    DisabledBGMemory = Gfx::TextureHeap->Alloc(disabledBGLayout.getSize(), disabledBGLayout.getAlignment());
+    DisabledBG.initialize(disabledBGLayout, Gfx::TextureHeap->MemBlock, DisabledBGMemory.Offset);
+
     ImageDescriptors = Gfx::DataHeap->Alloc(sizeof(dk::ImageDescriptor)*descriptorOffset_Count, DK_IMAGE_DESCRIPTOR_ALIGNMENT);
     dk::ImageDescriptor* imageDescriptors = Gfx::DataHeap->CpuAddr<dk::ImageDescriptor>(ImageDescriptors);
     for (u32 i = 0; i < fb_Count*2; i++)
@@ -139,6 +148,7 @@ DekoRenderer::DekoRenderer() :
         imageDescriptors[descriptorOffset_OBJWindow+i].initialize(dk::ImageView{OBJWindow[i]});
     }
     imageDescriptors[descriptorOffset_3DFramebuffer].initialize(dk::ImageView{_3DFramebuffer});
+    imageDescriptors[descriptorOffset_DisabledBG].initialize(dk::ImageView{DisabledBG});
 
     SamplerDescriptors = Gfx::DataHeap->Alloc(sizeof(dk::SamplerDescriptor), DK_SAMPLER_DESCRIPTOR_ALIGNMENT);
     Gfx::DataHeap->CpuAddr<dk::SamplerDescriptor>(SamplerDescriptors)->initialize(dk::Sampler{});
@@ -160,11 +170,18 @@ DekoRenderer::DekoRenderer() :
     Gfx::LoadShader("romfs:/shaders/OBJBitmap_fsh.dksh", ShaderOBJBitmap);
     Gfx::LoadShader("romfs:/shaders/OBJWindow4bpp_fsh.dksh", ShaderOBJWindow4bpp);
     Gfx::LoadShader("romfs:/shaders/OBJWindow8bpp_fsh.dksh", ShaderOBJWindow8bpp);
-    Gfx::LoadShader("romfs:/shaders/BlahShader_fsh.dksh", ShaderBlah);
 
     BGUniformMemory = Gfx::DataHeap->Alloc(BGUniformSize, DK_UNIFORM_BUF_ALIGNMENT);
     OBJUniformMemory = Gfx::DataHeap->Alloc(OBJUniformSize, DK_UNIFORM_BUF_ALIGNMENT);
     ComposeUniformMemory = Gfx::DataHeap->Alloc(ComposeUniformSize, DK_UNIFORM_BUF_ALIGNMENT);
+
+    {
+        CmdMem.Begin(EmuCmdBuf);
+        u8 disabledBGData[8*8] = {0};
+        UploadBuf.UploadAndCopyTexture(EmuCmdBuf, DisabledBG, disabledBGData, 0, 0, 8, 8, 8);
+        EmuQueue.submitCommands(CmdMem.End(EmuCmdBuf));
+        EmuQueue.waitIdle();
+    }
 }
 
 DekoRenderer::~DekoRenderer()
@@ -179,6 +196,16 @@ void DekoRenderer::UploadVRAM(const NonStupidBitField<Size>& dirty, u8* src, DkG
     assert(start < Size*GPU::VRAMDirtyGranularity);
     assert(start + size <= Size*GPU::VRAMDirtyGranularity);
     UploadBuf.UploadAndCopyData(EmuCmdBuf, dst + start, src + start, size);
+}
+
+template <u32 Size>
+void DekoRenderer::UploadPalVRAM(const NonStupidBitField<Size>& dirty, u8* dataSrc, u32& dst, DkGpuAddr& src, u32& size)
+{
+    dst = dirty.Min()*GPU::VRAMDirtyGranularity;
+    size = ((dirty.Max()+1)*GPU::VRAMDirtyGranularity)-dst;
+    assert(dst < Size*GPU::VRAMDirtyGranularity);
+    assert(dst + size <= Size*GPU::VRAMDirtyGranularity);
+    src = UploadBuf.UploadData(EmuCmdBuf, size, dataSrc + dst);
 }
 
 void DekoRenderer::OpenCmdBuf()
@@ -203,6 +230,14 @@ void DekoRenderer::Reset()
 
         OBJBatchFirstLine[i] = 0;
         OBJBatchLinesCount[i] = 0;
+
+        LastBlendCnt[i] = 0;
+        LastEVA[i] = 0;
+        LastEVB[i] = 0;
+        LastEVY[i] = 0;
+        LastMasterBrightness[i] = 0;
+        LastForceBlank[i] = false;
+        DirectBitmapNeeded[i] = false;
 
         for (int j = 0; j < 4; j++)
         {
@@ -233,11 +268,18 @@ void DekoRenderer::DrawScanline(u32 line, Unit* unit)
 
     int num = CurUnit->Num;
 
+    bool forceblank = false;
+
+    if (line > 192) forceblank = true;
+    if (CurUnit->Num && !CurUnit->Enabled) forceblank = true;
+
     OpenCmdBuf();
 
     bool uploadBarrier = false;
     {
         u32 bgmask = 0;
+        bool compositionDirty = line == 0;
+        ComposeRegion composeRegion = {0};
 
         for (int i = 0; i < 4; i++)
         {
@@ -252,11 +294,15 @@ void DekoRenderer::DrawScanline(u32 line, Unit* unit)
         }
         for (int i = 0; i < 2; i++)
         {
-            if (LastBGRotA[num][i] != CurUnit->BGRotA[i] ||
+            if (LastBGXRef[num][i] != CurUnit->BGXRef[i] ||
+                LastBGYRef[num][i] != CurUnit->BGYRef[i] ||
+                LastBGRotA[num][i] != CurUnit->BGRotA[i] ||
                 LastBGRotB[num][i] != CurUnit->BGRotB[i] ||
                 LastBGRotC[num][i] != CurUnit->BGRotC[i] ||
                 LastBGRotD[num][i] != CurUnit->BGRotD[i])
             {
+                LastBGXRef[num][i] = CurUnit->BGXRef[i];
+                LastBGYRef[num][i] = CurUnit->BGYRef[i];
                 LastBGRotA[num][i] = CurUnit->BGRotA[i];
                 LastBGRotB[num][i] = CurUnit->BGRotB[i];
                 LastBGRotC[num][i] = CurUnit->BGRotC[i];
@@ -265,25 +311,37 @@ void DekoRenderer::DrawScanline(u32 line, Unit* unit)
                     bgmask |= 1 << (i+2);
             }
         }
-
-        if (LastDispCnt[num] != CurUnit->DispCnt)
+    
+        if (LastBlendCnt[num] != CurUnit->BlendCnt
+            || LastMasterBrightness[num] != CurUnit->MasterBrightness
+            || LastEVA[num] != CurUnit->EVA
+            || LastEVB[num] != CurUnit->EVB
+            || LastEVY[num] != CurUnit->EVY
+            || LastForceBlank[num] != forceblank)
         {
-            LastDispCnt[num] = CurUnit->DispCnt;
-            bgmask = 0xF;
+            LastBlendCnt[num] = CurUnit->BlendCnt;
+            LastMasterBrightness[num] = CurUnit->MasterBrightness;
+            LastEVA[num] = CurUnit->EVA;
+            LastEVB[num] = CurUnit->EVB;
+            LastEVY[num] = CurUnit->EVY;
+            LastForceBlank[num] = forceblank;
+            compositionDirty = true;
         }
+
+        if ((LastDispCnt[num] ^ CurUnit->DispCnt) & 0xFF000F07)
+            bgmask = 0xF;
+        if ((LastDispCnt[num] ^ CurUnit->DispCnt) & 0x31F84)
+            compositionDirty = true;
 
         for (int i = 0; i < 4; i++)
         {
-            if (LastBGCnt[num][i] != CurUnit->BGCnt[i])
-            {
+            if ((LastBGCnt[num][i] ^ CurUnit->BGCnt[i]) & 0xFFFC)
                 bgmask |= 1 << i;
-                LastBGCnt[num][i] = CurUnit->BGCnt[i];
-            }
+            if ((LastBGCnt[num][i] ^ CurUnit->BGCnt[i]) & 0x3)
+                compositionDirty = true;
         }
 
         u32 paletteDirty = (GPU::PaletteDirty >> CurUnit->Num*2) & 0x3;
-        if (paletteDirty & 1)
-            bgmask = 0xF;
 
         if (num == 0)
         {
@@ -302,15 +360,15 @@ void DekoRenderer::DrawScanline(u32 line, Unit* unit)
             auto bgExtPalDirty = GPU::VRAMDirty_ABGExtPal.DeriveState(GPU::VRAMMap_ABGExtPal);
             if (GPU::MakeVRAMFlat_ABGExtPalCoherent(bgExtPalDirty))
             {
-                UploadVRAM(bgExtPalDirty, GPU::VRAMFlat_ABGExtPal, Gfx::TextureHeap->GpuAddr(PaletteTextureMemory) + paletteMemory_BGExtPalOffset);
-                uploadBarrier = true;
+                UploadPalVRAM(bgExtPalDirty, GPU::VRAMFlat_ABGExtPal, composeRegion.BGExtPalDst, composeRegion.BGExtPalSrc, composeRegion.BGExtPalSize);
+                compositionDirty = true;
             }
 
             auto objExtPalDirty = GPU::VRAMDirty_AOBJExtPal.DeriveState(&GPU::VRAMMap_AOBJExtPal);
             if (GPU::MakeVRAMFlat_AOBJExtPalCoherent(objExtPalDirty))
             {
-                UploadVRAM(objExtPalDirty, GPU::VRAMFlat_AOBJExtPal, Gfx::TextureHeap->GpuAddr(PaletteTextureMemory) + paletteMemory_OBJExtPalOffset);
-                uploadBarrier = true;
+                UploadPalVRAM(objExtPalDirty, GPU::VRAMFlat_AOBJExtPal, composeRegion.OBJExtPalDst, composeRegion.OBJExtPalSrc, composeRegion.OBJExtPalSize);
+                compositionDirty = true;
             }
         }
         else
@@ -330,32 +388,46 @@ void DekoRenderer::DrawScanline(u32 line, Unit* unit)
             auto bgExtPalDirty = GPU::VRAMDirty_BBGExtPal.DeriveState(GPU::VRAMMap_BBGExtPal);
             if (GPU::MakeVRAMFlat_BBGExtPalCoherent(bgExtPalDirty))
             {
-                UploadVRAM(bgExtPalDirty, GPU::VRAMFlat_BBGExtPal, Gfx::TextureHeap->GpuAddr(PaletteTextureMemory) + paletteMemory_UnitSize + paletteMemory_BGExtPalOffset);
-                uploadBarrier = true;
+                UploadPalVRAM(bgExtPalDirty, GPU::VRAMFlat_BBGExtPal, composeRegion.BGExtPalDst, composeRegion.BGExtPalSrc, composeRegion.BGExtPalSize);
+                compositionDirty = true;
             }
 
             auto objExtPalDirty = GPU::VRAMDirty_BOBJExtPal.DeriveState(&GPU::VRAMMap_BOBJExtPal);
             if (GPU::MakeVRAMFlat_BOBJExtPalCoherent(objExtPalDirty))
             {
-                UploadVRAM(objExtPalDirty, GPU::VRAMFlat_BOBJExtPal, Gfx::TextureHeap->GpuAddr(PaletteTextureMemory) + paletteMemory_UnitSize + paletteMemory_OBJExtPalOffset);
-                uploadBarrier = true;
+                UploadPalVRAM(objExtPalDirty, GPU::VRAMFlat_BOBJExtPal, composeRegion.OBJExtPalDst, composeRegion.OBJExtPalSrc, composeRegion.OBJExtPalSize);
+                compositionDirty = true;
             }
         }
 
         if (paletteDirty)
         {
-            u32 paletteOffset = (paletteDirty & 1) ? 0 : 512;
-            UploadBuf.UploadAndCopyData(EmuCmdBuf, Gfx::TextureHeap->GpuAddr(PaletteTextureMemory) + paletteOffset + PaletteTextures[0].getLayout().getSize()*CurUnit->Num,
-                &GPU::Palette[(num ? 1024 : 0) + paletteOffset],
-                paletteDirty == 0x3 ? 1024 : 512);
-
+            composeRegion.StdPalDst = (paletteDirty & 1) ? 0 : 512;
+            composeRegion.StdPalSize = paletteDirty == 0x3 ? 1024 : 512;
+            composeRegion.StdPalSrc = UploadBuf.UploadData(EmuCmdBuf, composeRegion.StdPalSize, &GPU::Palette[composeRegion.StdPalDst + (num ? 1024 : 0)]);
             GPU::PaletteDirty &= ~(0x3 << num*2);
+            compositionDirty = true;
+        }
 
-            uploadBarrier = true;
+        LastDispCnt[num] = CurUnit->DispCnt;
+        for (int i = 0; i < 4; i++)
+            LastBGCnt[num][i] = CurUnit->BGCnt[i];
+
+        if (compositionDirty)
+        {
+            composeRegion.DispCnt = CurUnit->DispCnt;
+            for (int i = 0; i < 4; i++)
+                composeRegion.BGCnt[i] = CurUnit->BGCnt[i];
+            composeRegion.BlendCnt = CurUnit->BlendCnt;
+            composeRegion.MasterBrightness = CurUnit->MasterBrightness;
+            composeRegion.EVA = CurUnit->EVA;
+            composeRegion.EVB = CurUnit->EVB;
+            composeRegion.EVY = CurUnit->EVY;
+            ComposeRegions[num].push_back(composeRegion);
         }
     }
 
-    if (n3dline == 0 && CurUnit->Num == 0)
+    if (n3dline == 0 && CurUnit->Num == 0 && !forceblank)
     {
         if (CurUnit->CaptureCnt & (1 << 31))
         {
@@ -370,6 +442,9 @@ void DekoRenderer::DrawScanline(u32 line, Unit* unit)
         }
     }
 
+    if (CurUnit->Num == 0 && CaptureLatch && (CaptureCnt & (1<<25)) && ((CaptureCnt >> 29) & 0x3) != 0)
+        memcpy(DispFIFOFramebuffer, CurUnit->DispFIFOBuffer, 256*2);
+
     /*if (CurUnit->Num == 0)
     {
         u32* _3dline = GPU3D::GetLine(n3dline);
@@ -379,33 +454,44 @@ void DekoRenderer::DrawScanline(u32 line, Unit* unit)
         }
     }*/
 
-    u32 dispmode = CurUnit->DispCnt >> 16;
-    dispmode &= (num ? 0x1 : 0x3);
-
-    switch (dispmode)
+    if (!forceblank)
     {
-    case 0:
-        memset(&DirectBitmap[CurUnit->Num][line*256], 0xFF, 256*2);
-        break;
-    case 2:
-        {
-            u32 vrambank = (CurUnit->DispCnt >> 18) & 0x3;
-            if (GPU::VRAMMap_LCDC & (1<<vrambank))
-            {
-                u16* vram = (u16*)GPU::VRAM[vrambank];
-                vram = &vram[line * 256];
+        u32 dispmode = CurUnit->DispCnt >> 16;
+        dispmode &= (num ? 0x1 : 0x3);
 
-                memcpy(&DirectBitmap[CurUnit->Num][line*256], vram, 256*2);
-            }
-            else
+        switch (dispmode)
+        {
+        case 0:
+            memset(&DirectBitmap[num][line*256], 0xFF, 256*2);
+            DirectBitmapNeeded[num] = true;
+            break;
+        case 2:
             {
-                memset(&DirectBitmap[CurUnit->Num][line*256], 0, 256*2);
+                DirectBitmapNeeded[num] = true;
+                u32 vrambank = (CurUnit->DispCnt >> 18) & 0x3;
+                if (GPU::VRAMMap_LCDC & (1<<vrambank))
+                {
+                    u16* vram = (u16*)GPU::VRAM[vrambank];
+                    vram = &vram[line * 256];
+
+                    memcpy(&DirectBitmap[num][line*256], vram, 256*2);
+                }
+                else
+                {
+                    memset(&DirectBitmap[num][line*256], 0, 256*2);
+                }
             }
+            break;
+        case 3:
+            DirectBitmapNeeded[num] = true;
+            memcpy(&DirectBitmap[num][line*256], CurUnit->DispFIFOBuffer, 256*2);
+            break;
         }
-        break;
-    case 3:
-        memcpy(&DirectBitmap[CurUnit->Num][line*256], CurUnit->DispFIFOBuffer, 256*2);
-        break;
+    }
+    else
+    {
+        DirectBitmapNeeded[num] = true;
+        memset(&DirectBitmap[num][line*256], 0xFF, 256*2);
     }
 
     DrawScanline_BGOBJ(line);
@@ -414,13 +500,16 @@ void DekoRenderer::DrawScanline(u32 line, Unit* unit)
     {
         BGBatchLinesCount[num][i]++;
     }
+    ComposeRegions[num][ComposeRegions[num].size()-1].LinesCount++;
 
     if (n3dline == 191)
     {
-        if (dispmode != 1)
+        if (DirectBitmapNeeded[num])
         {
             UploadBuf.UploadAndCopyTexture(EmuCmdBuf, DirectBitmapTexture[num], (u8*)DirectBitmap[CurUnit->Num], 0, 0, 256, 192, 256*2);
             uploadBarrier = true;
+
+            DirectBitmapNeeded[num] = false;
         }
 
         /*if (num == 0)
@@ -438,7 +527,8 @@ void DekoRenderer::DrawScanline(u32 line, Unit* unit)
         u32 renderFull = 0;
         for (int i = 0; i < 4; i++)
         {
-            if (BGBatchFirstLine[num][i] == 0 && BGBatchLinesCount[num][i] == 192)
+            if ((BGBatchFirstLine[num][i] == 0 && BGBatchLinesCount[num][i] == 192)
+                || BGBatchFirstLine[num][i] == -1)
                 renderFull |= 1 << i;
         }
         // flush all backgrounds
@@ -491,12 +581,14 @@ void DekoRenderer::DrawSprites(u32 line, Unit* unit)
         GPU::OAMDirty &= ~(1 << num);
     }
 
+    bool objFmtChanged = (LastDispCnt[CurUnit->Num] ^ CurUnit->DispCnt) & 0x70;
+
     bool uploadBarrier = false;
     if (num == 0)
     {
         auto objDirty = GPU::VRAMDirty_AOBJ.DeriveState(GPU::VRAMMap_AOBJ);
 
-        if (oamDirty || objDirty)
+        if (oamDirty || objDirty || objFmtChanged)
             FlushOBJDraw(line);
 
         if (GPU::MakeVRAMFlat_AOBJCoherent(objDirty))
@@ -509,7 +601,7 @@ void DekoRenderer::DrawSprites(u32 line, Unit* unit)
     {
         auto objDirty = GPU::VRAMDirty_BOBJ.DeriveState(GPU::VRAMMap_BOBJ);
 
-        if (oamDirty || objDirty)
+        if (oamDirty || objDirty || objFmtChanged)
             FlushOBJDraw(line);
 
         if (GPU::MakeVRAMFlat_BOBJCoherent(objDirty))
@@ -526,7 +618,8 @@ void DekoRenderer::DrawSprites(u32 line, Unit* unit)
 
     if (line == 191)
     {
-        bool drawFull = OBJBatchFirstLine[num] == 0 && OBJBatchLinesCount[num] == 192;
+        bool drawFull = (OBJBatchFirstLine[num] == 0 && OBJBatchLinesCount[num] == 192)
+            || OBJBatchFirstLine[num] == -1;
         FlushOBJDraw(line+1);
 
         OBJBatchFirstLine[num] = drawFull ? -1 : 0;
@@ -1206,6 +1299,7 @@ void DekoRenderer::FlushOBJDraw(u32 curline)
 
     if (firstLine == -1)
     {
+        //printf("skipping obj\n");
         OBJBatchFirstLine[CurUnit->Num] = curline;
         OBJBatchLinesCount[CurUnit->Num] = 0;
         return;
@@ -1243,190 +1337,187 @@ void DekoRenderer::FlushOBJDraw(u32 curline)
     OBJUniform uniform;
     uniform.VRAMMask = CurUnit->Num ? 0x1FFFF : 0x3FFFF;
 
-    //printf("sprites...\n");
-    if (CurUnit->DispCnt & 0x1000)
+    //printf("sprites %d, %d...\n", firstLine, linesCount);
+    for (int sprnum = 0; sprnum < 128; sprnum++)
     {
-        for (int sprnum = 0; sprnum < 128; sprnum++)
+        u16* attrib = &oam[sprnum*4];
+
+        uniform.RotScaleParams[sprnum] = (float)(s16)oam[sprnum*4+3] / 256.f;
+
+        bool isAffine = attrib[0] & 0x0100;
+
+        if ((attrib[0] & 0x0200) && !isAffine)
+            continue;
+
+        u32 spritemode = (attrib[0] >> 10) & 0x3;
+        u32 tilenum = attrib[2] & 0x03FF;
+
+        const u8 spritewidth[16] =
         {
-            u16* attrib = &oam[sprnum*4];
+            8, 16, 8, 8,
+            16, 32, 8, 8,
+            32, 32, 16, 8,
+            64, 64, 32, 8
+        };
+        const u8 spriteheight[16] =
+        {
+            8, 8, 16, 8,
+            16, 8, 32, 8,
+            32, 16, 32, 8,
+            64, 32, 64, 8
+        };
 
-            uniform.RotScaleParams[sprnum] = (float)(s16)oam[sprnum*4+3] / 256.f;
+        u32 sizeparam = (attrib[0] >> 14) | ((attrib[1] & 0xC000) >> 12);
+        u32 width = spritewidth[sizeparam];
+        u32 height = spriteheight[sizeparam];
 
-            bool isAffine = attrib[0] & 0x0100;
+        u32 addr, strideShift = 0;
+        int spriteKind;
+        u32 prio = (attrib[2] >> 10) & 0x3;
+        u32 meta = (prio << 29) | 0x400000U;
+        float depthKey = ((sprnum | (prio << 7)) / 512.f);
+        //printf("depth key %f %d %d\n", depthKey, prio, sprnum);
 
-            if ((attrib[0] & 0x0200) && !isAffine)
-                continue;
+        if (isAffine)
+        {
+            if (attrib[0] & 0x0200)
+                strideShift |= 0x800000U;
 
-            u32 spritemode = (attrib[0] >> 10) & 0x3;
-            u32 tilenum = attrib[2] & 0x03FF;
-
-            const u8 spritewidth[16] =
-            {
-                8, 16, 8, 8,
-                16, 32, 8, 8,
-                32, 32, 16, 8,
-                64, 64, 32, 8
-            };
-            const u8 spriteheight[16] =
-            {
-                8, 8, 16, 8,
-                16, 8, 32, 8,
-                32, 16, 32, 8,
-                64, 32, 64, 8
-            };
-
-            u32 sizeparam = (attrib[0] >> 14) | ((attrib[1] & 0xC000) >> 12);
-            u32 width = spritewidth[sizeparam];
-            u32 height = spriteheight[sizeparam];
-
-            u32 addr, strideShift = 0;
-            int spriteKind;
-            u32 prio = (attrib[2] >> 10) & 0x3;
-            u32 meta = (prio << 29) | 0x400000U;
-            float depthKey = ((sprnum | (prio << 7)) / 512.f);
-            //printf("depth key %f %d %d\n", depthKey, prio, sprnum);
-
-            if (isAffine)
-            {
-                if (attrib[0] & 0x0200)
-                    strideShift |= 0x800000U;
-
-                strideShift |= ((attrib[1] >> 9) & 0x1F) << 24;
-            }
-            else
-            {
-                // flip horizontally
-                if (attrib[1] & 0x1000)
-                    strideShift |= 0x40000000;
-                if (attrib[1] & 0x2000)
-                    strideShift |= 0x80000000;
-            }
-
-            if (spritemode == 3)
-            {
-                if (CurUnit->DispCnt & 0x40)
-                {
-                    if (CurUnit->DispCnt & 0x20)
-                    {
-                        // 'reserved'
-                        // draws nothing
-
-                        continue;
-                    }
-                    else
-                    {
-                        addr = tilenum << (7 + ((CurUnit->DispCnt >> 22) & 0x1));
-                        strideShift |= __builtin_ctz(width >> 8) + 1;
-                    }
-                }
-                else
-                {
-                    if (CurUnit->DispCnt & 0x20)
-                    {
-                        addr = ((tilenum & 0x01F) << 4) + ((tilenum & 0x3E0) << 7);
-                        strideShift |= 9;
-                    }
-                    else
-                    {
-                        addr = ((tilenum & 0x00F) << 4) + ((tilenum & 0x3F0) << 7);
-                        strideShift |= 8;
-                    }
-                }
-
-                // bitmap sprites are always semitransparent
-                meta |= 0x80000000;
-
-                u32 alpha = (attrib[2] & 0xF000) >> 12;
-                if (alpha == 0)
-                    continue;
-                alpha++;
-
-                meta |= alpha << 24;
-
-                spriteKind = isAffine ? spriteKind_AffineBitmap : spriteKind_RegularBitmap;
-            }
-            else
-            {
-                meta |= 0x800000; // add paletted flag
-
-                if (spritemode == 2)
-                {
-                    // OBJ window
-                    numWindowSpritesTotal++;
-                }
-                if (spritemode == 1)
-                {
-                    // semi transparent
-                    meta |= 0x80000000;
-                }
-                else
-                {
-                    meta |= 0x10000000;
-                }
-
-                addr = tilenum;
-                if (CurUnit->DispCnt & 0x10)
-                {
-                    addr <<= ((CurUnit->DispCnt >> 20) & 0x3);
-                    strideShift |= __builtin_ctz(width) - 3 + ((attrib[0] & 0x2000) ? 1:0);
-                }
-                else
-                {
-                    strideShift |= 5;
-                }
-
-                strideShift += 5;
-                addr <<= 5;
-
-                if (attrib[0] & 0x2000)
-                {
-                    if (CurUnit->DispCnt & 0x80000000)
-                        meta |= (((attrib[2] & 0xF000) >> 12) + paletteMemory_OBJExtPalOffset/512) << 8;
-                    else
-                        meta |= 0x100;
-
-                    spriteKind = isAffine
-                        ? (spritemode == 2 ? spriteKind_AffineWindow8bpp :  spriteKind_Affine8bpp)
-                        : (spritemode == 2 ? spriteKind_RegularWindow8bpp : spriteKind_Regular8bpp);
-                }
-                else
-                {
-                    meta |= ((attrib[2] & 0xF000) >> 8) + 0x100;
-
-                    spriteKind = isAffine
-                        ? (spritemode == 2 ? spriteKind_AffineWindow4bpp :  spriteKind_Affine4bpp)
-                        : (spritemode == 2 ? spriteKind_RegularWindow4bpp : spriteKind_Regular4bpp);
-                }
-            }
-            SpriteSpec& sprite = sprites[spriteKind][numSprites[spriteKind]];
-
-            sprite.X = (s16)((s32)(attrib[1] << 23) >> 23);
-            sprite.Y = attrib[0] & 0xFF;
-            // not entirely accurate (it doesn't handle sprites coming off on the other side)
-            if (sprite.Y >= 192)
-                sprite.Y = sprite.Y - 256;
-
-            sprite.Width = spritewidth[sizeparam];
-            sprite.Height = spriteheight[sizeparam];
-            sprite.BaseAddr = addr;
-            sprite.StrideShift = strideShift;
-            sprite.Meta = meta;
-            sprite.Depth = depthKey;
-            //printf("%d %d %x %x %d %d %d %d %d\n", spriteKind, prio, sprite.BaseAddr, sprite.StrideShift, tilenum, sprite.X, sprite.Y, sprite.Width, sprite.Height);
-
-            if (sprite.Y >= firstLine + linesCount)
-                continue;
-            if (sprite.Y + sprite.Height <= firstLine)
-                continue;
-
-            if (sprite.X < -sprite.Width)
-                continue;
-            if (sprite.Y < -sprite.Height)
-                continue;
-
-            numSprites[spriteKind]++;
-            numSpritesTotal++;
+            strideShift |= ((attrib[1] >> 9) & 0x1F) << 24;
         }
+        else
+        {
+            // flip horizontally
+            if (attrib[1] & 0x1000)
+                strideShift |= 0x40000000;
+            if (attrib[1] & 0x2000)
+                strideShift |= 0x80000000;
+        }
+
+        if (spritemode == 3)
+        {
+            if (CurUnit->DispCnt & 0x40)
+            {
+                if (CurUnit->DispCnt & 0x20)
+                {
+                    // 'reserved'
+                    // draws nothing
+
+                    continue;
+                }
+                else
+                {
+                    addr = tilenum << (7 + ((CurUnit->DispCnt >> 22) & 0x1));
+                    strideShift |= __builtin_ctz(width >> 8) + 1;
+                }
+            }
+            else
+            {
+                if (CurUnit->DispCnt & 0x20)
+                {
+                    addr = ((tilenum & 0x01F) << 4) + ((tilenum & 0x3E0) << 7);
+                    strideShift |= 9;
+                }
+                else
+                {
+                    addr = ((tilenum & 0x00F) << 4) + ((tilenum & 0x3F0) << 7);
+                    strideShift |= 8;
+                }
+            }
+
+            // bitmap sprites are always semitransparent
+            meta |= 0x80000000;
+
+            u32 alpha = (attrib[2] & 0xF000) >> 12;
+            if (alpha == 0)
+                continue;
+            alpha++;
+
+            meta |= alpha << 24;
+
+            spriteKind = isAffine ? spriteKind_AffineBitmap : spriteKind_RegularBitmap;
+        }
+        else
+        {
+            meta |= 0x800000; // add paletted flag
+
+            if (spritemode == 2)
+            {
+                // OBJ window
+                numWindowSpritesTotal++;
+            }
+            if (spritemode == 1)
+            {
+                // semi transparent
+                meta |= 0x80000000;
+            }
+            else
+            {
+                meta |= 0x10000000;
+            }
+
+            addr = tilenum;
+            if (CurUnit->DispCnt & 0x10)
+            {
+                addr <<= ((CurUnit->DispCnt >> 20) & 0x3);
+                strideShift |= __builtin_ctz(width) - 3 + ((attrib[0] & 0x2000) ? 1:0);
+            }
+            else
+            {
+                strideShift |= 5;
+            }
+
+            strideShift += 5;
+            addr <<= 5;
+
+            if (attrib[0] & 0x2000)
+            {
+                if (CurUnit->DispCnt & 0x80000000)
+                    meta |= (((attrib[2] & 0xF000) >> 12) + paletteMemory_OBJExtPalOffset/512) << 8;
+                else
+                    meta |= 0x100;
+
+                spriteKind = isAffine
+                    ? (spritemode == 2 ? spriteKind_AffineWindow8bpp :  spriteKind_Affine8bpp)
+                    : (spritemode == 2 ? spriteKind_RegularWindow8bpp : spriteKind_Regular8bpp);
+            }
+            else
+            {
+                meta |= ((attrib[2] & 0xF000) >> 8) + 0x100;
+
+                spriteKind = isAffine
+                    ? (spritemode == 2 ? spriteKind_AffineWindow4bpp :  spriteKind_Affine4bpp)
+                    : (spritemode == 2 ? spriteKind_RegularWindow4bpp : spriteKind_Regular4bpp);
+            }
+        }
+        SpriteSpec& sprite = sprites[spriteKind][numSprites[spriteKind]];
+
+        sprite.X = (s16)((s32)(attrib[1] << 23) >> 23);
+        sprite.Y = attrib[0] & 0xFF;
+        // not entirely accurate (it doesn't handle sprites coming off on the other side)
+        if (sprite.Y >= 192)
+            sprite.Y = sprite.Y - 256;
+
+        sprite.Width = spritewidth[sizeparam];
+        sprite.Height = spriteheight[sizeparam];
+        sprite.BaseAddr = addr;
+        sprite.StrideShift = strideShift;
+        sprite.Meta = meta;
+        sprite.Depth = depthKey;
+        //printf("%d %d %x %x %d %d %d %d %d\n", spriteKind, prio, sprite.BaseAddr, sprite.StrideShift, tilenum, sprite.X, sprite.Y, sprite.Width, sprite.Height);
+
+        if (sprite.Y >= firstLine + linesCount)
+            continue;
+        if (sprite.Y + sprite.Height <= firstLine)
+            continue;
+
+        if (sprite.X < -sprite.Width)
+            continue;
+        if (sprite.Y < -sprite.Height)
+            continue;
+
+        numSprites[spriteKind]++;
+        numSpritesTotal++;
     }
 
     EmuCmdBuf.setScissors(0, {DkScissor{0, (u32)firstLine, 256, (u32)linesCount}});
@@ -1571,6 +1662,7 @@ void DekoRenderer::FlushBGDraw(u32 curline, u32 bgmask)
             }
             else
             {
+                //printf("skipping bg draw %d %d\n", CurUnit->Num, curline);
                 bgmask &= ~(1 << i);
                 BGBatchFirstLine[CurUnit->Num][i] = curline;
                 BGBatchLinesCount[CurUnit->Num][i] = 0;
@@ -1600,7 +1692,7 @@ void DekoRenderer::FlushBGDraw(u32 curline, u32 bgmask)
         {
             assert(linesCount > 0);
             assert(firstLine != -1);
-            if (BGState[CurUnit->Num][i] != bgState_3D)
+            if (BGState[CurUnit->Num][i] >= bgState_Text4bpp)
             {
                 BGOBJRedrawn[CurUnit->Num] |= (1 << i);
                 dk::ImageView colorTarget{IntermedFramebuffers[fb_Count * CurUnit->Num + fb_BG0 + i]};
@@ -1608,35 +1700,28 @@ void DekoRenderer::FlushBGDraw(u32 curline, u32 bgmask)
                 EmuCmdBuf.setScissors(0, {DkScissor{0, (u32)firstLine, 256, (u32)linesCount}});
 
                 //printf("drawing bg range %d %d\n", firstLine, linesCount);
-
-                if (BGState[CurUnit->Num][i] == bgState_Disable)
+                EmuCmdBuf.pushConstants(Gfx::DataHeap->GpuAddr(BGUniformMemory), BGUniformSize,
+                    offsetof(BGUniform, Text), sizeof(BGUniform::Text),
+                    &BGTextUniforms[CurUnit->Num][i].Text);
+                EmuCmdBuf.pushConstants(Gfx::DataHeap->GpuAddr(BGUniformMemory), BGUniformSize,
+                    offsetof(BGUniform, PerLineData) + firstLine*4*4, 4*4*linesCount,
+                    &BGTextUniforms[CurUnit->Num][i].PerLineData[firstLine*4]);
+                dk::Shader* shaders[] =
                 {
-                    EmuCmdBuf.clearColor(0, DkColorMask_R, 0);
-                }
-                else
-                {
-                    EmuCmdBuf.pushConstants(Gfx::DataHeap->GpuAddr(BGUniformMemory), BGUniformSize,
-                        offsetof(BGUniform, Text), sizeof(BGUniform::Text),
-                        &BGTextUniforms[CurUnit->Num][i].Text);
-                    EmuCmdBuf.pushConstants(Gfx::DataHeap->GpuAddr(BGUniformMemory), BGUniformSize,
-                        offsetof(BGUniform, PerLineData) + firstLine*4*4, 4*4*linesCount,
-                        &BGTextUniforms[CurUnit->Num][i].PerLineData[firstLine*4]);
-                    dk::Shader* shaders[] =
-                    {
-                        NULL,
-                        NULL,
-                        &ShaderBGText4Bpp,
-                        &ShaderBGText8Bpp,
-                        &ShaderBGAffine,
-                        &ShaderBGExtendedBitmap8pp,
-                        &ShaderBGExtendedBitmapDirect,
-                        &ShaderBGExtendedMixed
-                    };
-                    EmuCmdBuf.bindShaders(DkStageFlag_GraphicsMask, {&ShaderFullscreenQuad, shaders[BGState[CurUnit->Num][i]]});
-                    EmuCmdBuf.draw(DkPrimitive_TriangleStrip, 4, 1, 0, 0);
-                }
+                    NULL,
+                    NULL,
+                    &ShaderBGText4Bpp,
+                    &ShaderBGText8Bpp,
+                    &ShaderBGAffine,
+                    &ShaderBGExtendedBitmap8pp,
+                    &ShaderBGExtendedBitmapDirect,
+                    &ShaderBGExtendedMixed
+                };
+                EmuCmdBuf.bindShaders(DkStageFlag_GraphicsMask, {&ShaderFullscreenQuad, shaders[BGState[CurUnit->Num][i]]});
+                EmuCmdBuf.draw(DkPrimitive_TriangleStrip, 4, 1, 0, 0);
             }
 
+            assert(BGBatchLinesCount[CurUnit->Num][i] > 0);
             BGBatchFirstLine[CurUnit->Num][i] += BGBatchLinesCount[CurUnit->Num][i];
             BGBatchLinesCount[CurUnit->Num][i] = 0;
         }
@@ -1647,102 +1732,158 @@ void DekoRenderer::FlushBGDraw(u32 curline, u32 bgmask)
 
 void DekoRenderer::ComposeBGOBJ()
 {
-    u32 dispmode = CurUnit->DispCnt >> 16;
-    dispmode &= (CurUnit->Num ? 0x1 : 0x3);
-
     dk::ImageView colorTarget{FinalFramebuffers[GPU::FrontBuffer^1][CurUnit->Num == UnitAIsTop]};
     dk::Shader* shader;
-    bool showDirectBitmap = dispmode != 1 || (CurUnit->DispCnt & (1<<7));
-    if (CurUnit->Num == 0 && CaptureLatch && !(CaptureCnt & (1<<24)))
-    {
-        dk::ImageView bgobj{BGOBJTexture};
-        EmuCmdBuf.bindRenderTargets({&colorTarget, &bgobj});
-        shader = showDirectBitmap ? &ShaderComposeBGOBJShowBitmap : &ShaderComposeBGOBJ;
-    }
-    else
-    {
-        EmuCmdBuf.bindRenderTargets({&colorTarget});
-        shader = showDirectBitmap ? &ShaderComposeBGOBJDirectBitmapOnly : &ShaderComposeBGOBJ;
-    }
-    EmuCmdBuf.bindShaders(DkStageFlag_GraphicsMask, {&ShaderFullscreenQuad, shader});
-    DkScissor scissor = {0, 0, 256, 192};
-    EmuCmdBuf.setScissors(0, {scissor, scissor});
+    bool capture = CurUnit->Num == 0 && CaptureLatch && !(CaptureCnt & (1<<24));
     EmuCmdBuf.bindVtxAttribState({});
 
-    u32 bgOrder[4];
-    int n = 0;
-    for (int i = 3; i >= 0; i--)
-        for (int j = 3; j >= 0; j--)
-            if ((CurUnit->BGCnt[j] & 0x3) == i)
-                bgOrder[n++] = j;
-
-    ComposeUniform& composeUniform = ComposeUniforms[CurUnit->Num];
-    int textureHandleIdx[4];
-
-    for (int i = 0; i < 4; i++)
+    EmuCmdBuf.bindTextures(DkStage_Fragment, 5,
     {
-        int curPrio = CurUnit->BGCnt[bgOrder[i]] & 0x3;
-        int nextPrio = i < 3 ? (CurUnit->BGCnt[bgOrder[i + 1]] & 0x3) : -1;
-
-        if (i == 0)
-        {
-            // insert all the sprites which come before the bg with the lowest priority
-            composeUniform.BGSpriteMasks[0] = 0;
-            for (int i = 3; i > curPrio; i--)
-                composeUniform.BGSpriteMasks[0] |= 1 << i;
-        }
-
-        // sprites are inserted wherever the priority of two backgrounds differs
-        composeUniform.BGSpriteMasks[i+1] = 0;
-
-        for (int j = curPrio; j > nextPrio; j--)
-            composeUniform.BGSpriteMasks[i+1] |= 1 << j;
-
-        if (BGState[CurUnit->Num][bgOrder[i]] == bgState_3D)
-        {
-            textureHandleIdx[i] = descriptorOffset_3DFramebuffer;
-        }
-        else
-        {
-            textureHandleIdx[i] = descriptorOffset_IntermedFb +
-                fb_BG0 + fb_Count * CurUnit->Num + bgOrder[i];
-        }
-
-        composeUniform.BGNumMask[i] = 1 << bgOrder[i];
-    }
-
-    assert(n == 4);
-    EmuCmdBuf.bindTextures(DkStage_Fragment, 0,
-    {
-        dkMakeTextureHandle(textureHandleIdx[0], 0),
-        dkMakeTextureHandle(textureHandleIdx[1], 0),
-        dkMakeTextureHandle(textureHandleIdx[2], 0),
-        dkMakeTextureHandle(textureHandleIdx[3], 0),
-
-        dkMakeTextureHandle(descriptorOffset_IntermedFb + fb_OBJ + fb_Count * CurUnit->Num, 0),
-
         dkMakeTextureHandle(descriptorOffset_Palettes + CurUnit->Num, 0),
-
         dkMakeTextureHandle(descriptorOffset_DirectBitmap + CurUnit->Num, 0),
-
         dkMakeTextureHandle(descriptorOffset_OBJWindow + CurUnit->Num, 0)
     });
 
     EmuCmdBuf.bindUniformBuffer(DkStage_Fragment, 0, Gfx::DataHeap->GpuAddr(ComposeUniformMemory), ComposeUniformSize);
-    composeUniform.MasterBrightnessFactor = CurUnit->MasterBrightness & 0x1F;
-    composeUniform.MasterBrightnessMode = CurUnit->MasterBrightness >> 14;
-    if (composeUniform.MasterBrightnessFactor == 0)
-        composeUniform.MasterBrightnessMode = 0;
-    if (composeUniform.MasterBrightnessFactor > 16)
-        composeUniform.MasterBrightnessFactor = 16;
-    composeUniform.BlendCnt = CurUnit->BlendCnt;
-    composeUniform.StandardColorEffect = (CurUnit->BlendCnt >> 6) & 0x3;
-    composeUniform.EVA = CurUnit->EVA;
-    composeUniform.EVB = CurUnit->EVB;
-    composeUniform.EVY = CurUnit->EVY;
-    EmuCmdBuf.pushConstants(Gfx::DataHeap->GpuAddr(ComposeUniformMemory), ComposeUniformSize, 0, sizeof(ComposeUniform), &composeUniform);
+    EmuCmdBuf.pushConstants(Gfx::DataHeap->GpuAddr(ComposeUniformMemory), ComposeUniformSize,
+        offsetof(ComposeUniform, Window), sizeof(ComposeUniforms[CurUnit->Num].Window),
+        &ComposeUniforms[CurUnit->Num].Window);
 
-    EmuCmdBuf.draw(DkPrimitive_TriangleStrip, 4, 1, 0, 0);
+    //printf("compositing image %d\n", CurUnit->Num);
+    u32 firstLine = 0;
+    for (ComposeRegion& region : ComposeRegions[CurUnit->Num])
+    {
+        DkGpuAddr paletteMemory = Gfx::TextureHeap->GpuAddr(PaletteTextureMemory) + paletteMemory_UnitSize * CurUnit->Num;
+        if (region.StdPalSize)
+        {
+            EmuCmdBuf.copyBuffer(
+                region.StdPalSrc,
+                paletteMemory + region.StdPalDst,
+                region.StdPalSize);
+        }
+        if (region.BGExtPalSize)
+        {
+            EmuCmdBuf.copyBuffer(
+                region.BGExtPalSrc,
+                paletteMemory + paletteMemory_BGExtPalOffset + region.BGExtPalDst,
+                region.BGExtPalSize);
+        }
+        if (region.OBJExtPalSize)
+        {
+            EmuCmdBuf.copyBuffer(
+                region.OBJExtPalSrc,
+                paletteMemory + paletteMemory_OBJExtPalOffset + region.OBJExtPalDst,
+                region.OBJExtPalSize);
+        }
+        if (region.StdPalSize || region.BGExtPalSize || region.OBJExtPalSize)
+        {
+            EmuCmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image);
+        }
+
+        u32 dispmode = region.DispCnt >> 16;
+        dispmode &= (CurUnit->Num ? 0x1 : 0x3);
+        bool showDirectBitmap = dispmode != 1 || (CurUnit->DispCnt & (1<<7)) || region.ForceBlank;
+
+        if (capture)
+        {
+            dk::ImageView bgobj{BGOBJTexture};
+            EmuCmdBuf.bindRenderTargets({&colorTarget, &bgobj});
+            shader = showDirectBitmap ? &ShaderComposeBGOBJShowBitmap : &ShaderComposeBGOBJ;
+        }
+        else
+        {
+            EmuCmdBuf.bindRenderTargets({&colorTarget});
+            shader = showDirectBitmap ? &ShaderComposeBGOBJDirectBitmapOnly : &ShaderComposeBGOBJ;
+        }
+        EmuCmdBuf.bindShaders(DkStageFlag_GraphicsMask, {&ShaderFullscreenQuad, shader});
+
+        DkScissor scissor = {0, firstLine, 256, region.LinesCount};
+        EmuCmdBuf.setScissors(0, {scissor, scissor});
+        //printf("compositing region %d %d\n", firstLine, region.LinesCount);
+
+        u32 bgOrder[4];
+        int n = 0;
+        for (int i = 3; i >= 0; i--)
+            for (int j = 3; j >= 0; j--)
+                if ((region.BGCnt[j] & 0x3) == i)
+                    bgOrder[n++] = j;
+
+        ComposeUniform& composeUniform = ComposeUniforms[CurUnit->Num];
+        int textureHandleIdx[4];
+
+        for (int i = 0; i < 4; i++)
+        {
+            int curPrio = region.BGCnt[bgOrder[i]] & 0x3;
+            int nextPrio = i < 3 ? (region.BGCnt[bgOrder[i + 1]] & 0x3) : -1;
+
+            if (i == 0)
+            {
+                // insert all the sprites which come before the bg with the lowest priority
+                composeUniform.BGSpriteMasks[0] = 0;
+                for (int i = 3; i > curPrio; i--)
+                    composeUniform.BGSpriteMasks[0] |= 1 << i;
+            }
+
+            // sprites are inserted wherever the priority of two backgrounds differs
+            composeUniform.BGSpriteMasks[i+1] = 0;
+
+            for (int j = curPrio; j > nextPrio; j--)
+                composeUniform.BGSpriteMasks[i+1] |= 1 << j;
+
+            if (!(region.DispCnt & (1<<(bgOrder[i]+8))))
+            {
+                textureHandleIdx[i] = descriptorOffset_DisabledBG;
+            }
+            else if (bgOrder[i] == 0 && CurUnit->Num == 0 && region.DispCnt & (1<<3))
+            {
+                textureHandleIdx[i] = descriptorOffset_3DFramebuffer;
+            }
+            else
+            {
+                textureHandleIdx[i] = descriptorOffset_IntermedFb +
+                    fb_BG0 + fb_Count * CurUnit->Num + bgOrder[i];
+            }
+
+            composeUniform.BGNumMask[i] = 1 << bgOrder[i];
+        }
+
+        int objTextureHandleIdx = region.DispCnt & (1<<12)
+            ? (descriptorOffset_IntermedFb + fb_OBJ + fb_Count * CurUnit->Num)
+            : descriptorOffset_DisabledBG;
+
+        assert(n == 4);
+        EmuCmdBuf.bindTextures(DkStage_Fragment, 0,
+        {
+            dkMakeTextureHandle(textureHandleIdx[0], 0),
+            dkMakeTextureHandle(textureHandleIdx[1], 0),
+            dkMakeTextureHandle(textureHandleIdx[2], 0),
+            dkMakeTextureHandle(textureHandleIdx[3], 0),
+            dkMakeTextureHandle(objTextureHandleIdx, 0),
+        });
+
+        composeUniform.MasterBrightnessFactor = region.MasterBrightness & 0x1F;
+        composeUniform.MasterBrightnessMode = region.MasterBrightness >> 14;
+        if (composeUniform.MasterBrightnessFactor == 0)
+            composeUniform.MasterBrightnessMode = 0;
+        if (composeUniform.MasterBrightnessFactor > 16)
+            composeUniform.MasterBrightnessFactor = 16;
+        composeUniform.BlendCnt = region.BlendCnt;
+        composeUniform.StandardColorEffect = (region.BlendCnt >> 6) & 0x3;
+        composeUniform.EVA = region.EVA;
+        composeUniform.EVB = region.EVB;
+        composeUniform.EVY = region.EVY;
+        EmuCmdBuf.pushConstants(Gfx::DataHeap->GpuAddr(ComposeUniformMemory), ComposeUniformSize,
+            0, sizeof(ComposeUniform)-sizeof(composeUniform.Window),
+            &composeUniform);
+
+        EmuCmdBuf.draw(DkPrimitive_TriangleStrip, 4, 1, 0, 0);
+
+        firstLine += region.LinesCount;
+    }
+    assert(firstLine == 192);
+
+    ComposeRegions[CurUnit->Num].clear();
+
     EmuCmdBuf.barrier(DkBarrier_Fragments, DkInvalidateFlags_Image);
 
     for (int i = 0; i < 5; i++)
