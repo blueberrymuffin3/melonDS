@@ -328,7 +328,7 @@ void DekoRenderer::DrawScanline(u32 line, Unit* unit)
             compositionDirty = true;
         }
 
-        if ((LastDispCnt[num] ^ CurUnit->DispCnt) & 0xFF000F07)
+        if ((LastDispCnt[num] ^ CurUnit->DispCnt) & 0xFF030F87)
             bgmask = 0xF;
         if ((LastDispCnt[num] ^ CurUnit->DispCnt) & 0x31F84)
             compositionDirty = true;
@@ -855,6 +855,9 @@ void DekoRenderer::DrawScanline_BGOBJ(u32 line)
     if (CurUnit->DispCnt & (1<<7))
     {
         memset(&DirectBitmap[CurUnit->Num][line*256], 0xFF, 256*2);
+
+        for (int i = 0; i < 4; i++)
+            BGState[CurUnit->Num][i] = bgState_Disable;
         return;
     }
 
