@@ -70,7 +70,7 @@ ClkrstSession Session;
 
 void ApplyOverclock(int setting)
 {
-    const int clockSpeeds[] = { 1020000000, 1224000000, 1581000000, 1785000000 };
+    const int clockSpeeds[] = { 1020000000, 1224000000, 1581000000, 1785000000, 918000000, 816000000, 714000000 };
     printf("applying overclock %d\n", clockSpeeds[setting]);
     if (UsePCV)
         pcvSetClockRate(PcvModule_CpuBus, clockSpeeds[setting]);
