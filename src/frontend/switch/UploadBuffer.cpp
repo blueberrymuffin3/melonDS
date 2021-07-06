@@ -38,9 +38,11 @@ void UploadBuffer::UploadAndCopyData(dk::CmdBuf cmdbuf, DkGpuAddr dst, u8* data,
     cmdbuf.copyBuffer(UploadData(cmdbuf, size, data), dst, size);
 }
 
-void UploadBuffer::UploadAndCopyTexture(dk::CmdBuf cmdbuf, dk::Image& image, u8* data, u32 x, u32 y, u32 width, u32 height, u32 pitch)
+void UploadBuffer::UploadAndCopyTexture(dk::CmdBuf cmdbuf, dk::Image& image,
+    u8* data,
+    u32 x, u32 y, u32 width, u32 height, u32 pitch, u32 layer)
 {
     DkCopyBuf src {UploadData(cmdbuf, pitch*height, data)};
     dk::ImageView dst{image};
-    cmdbuf.copyBufferToImage(src, dst, {0, 0, 0, width, height, 1});
+    cmdbuf.copyBufferToImage(src, dst, {0, 0, layer, width, height, 1});
 }

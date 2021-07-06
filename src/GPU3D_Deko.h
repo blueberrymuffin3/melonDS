@@ -162,7 +162,8 @@ private:
         u32 Variant;
         u32 Attr;
 
-        u32 __pad0, __pad1, __pad2;
+        float TextureLayer;
+        u32 __pad0, __pad1;
     };
 
     static const int TileSize = 8;
@@ -216,20 +217,35 @@ private:
     SpanSetupY YSpanSetups[MaxYSpanSetups];
     RenderPolygon RenderPolygons[2048];
 
+    struct TexArrayEntry
+    {
+        u16 TexArrayIdx;
+        u16 LayerIdx;
+    };
+    struct TexArray
+    {
+        GpuMemHeap::Allocation Memory;
+        dk::Image Image;
+        u32 ImageDescriptor;
+    };
+
     struct TexCacheEntry
     {
-        u32 ImageDescriptor;
+        u32 DescriptorIdx;
         u32 LastVariant; // very cheap way to make variant lookup faster
-        GpuMemHeap::Allocation Memory;
 
         u32 TextureRAMStart[2], TextureRAMSize[2];
         u32 TexPalStart, TexPalSize;
-        //NonStupidBitField<128*1024/512> TexPalMask;
+        u8 WidthLog2, HeightLog2;
+        TexArrayEntry Texture;
     };
     std::unordered_map<u64, TexCacheEntry> TexCache;
 
     u32 FreeImageDescriptorsCount = 0;
     u32 FreeImageDescriptors[TexCacheMaxImages];
+
+    std::vector<TexArrayEntry> FreeTextures[8][8];
+    std::vector<TexArray> TexArrays[8][8];
 
     u32 TextureDecodingBuffer[1024*1024];
 

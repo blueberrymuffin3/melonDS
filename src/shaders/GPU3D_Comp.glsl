@@ -40,6 +40,8 @@ struct Polygon
     int Variant;
 
     uint Attr;
+
+    float TextureLayer;
 };
 
 struct YSpanSetup
@@ -874,7 +876,7 @@ void main()
 
 layout (local_size_x = TileSize, local_size_y = TileSize) in;
 
-layout (binding = 0) uniform usampler2D CurrentTexture;
+layout (binding = 0) uniform usampler2DArray CurrentTexture;
 
 void main()
 {
@@ -1003,7 +1005,7 @@ void main()
 #ifdef UseTexture
             vec2 uvf = vec2(ivec2(u, v)) * vec2(1.0 / 16.0) * InvTextureSize;
 
-            uvec4 texcolor = texture(CurrentTexture, uvf);
+            uvec4 texcolor = texture(CurrentTexture, vec3(uvf, polygon.TextureLayer));
 #ifdef Decal
             if (texcolor.a == 31)
             {

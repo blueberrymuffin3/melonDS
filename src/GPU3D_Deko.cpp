@@ -121,10 +121,15 @@ void DekoRenderer::DeInit()
 
 void DekoRenderer::Reset()
 {
-    for (auto it : TexCache)
+    for (u32 i = 0; i < 8; i++)
     {
-        TexCacheEntry& entry = it.second;
-        Gfx::TextureHeap->Free(entry.Memory);
+        for (u32 j = 0; j < 8; j++)
+        {
+            for (u32 k = 0; k < TexArrays[i][j].size(); k++)
+                Gfx::TextureHeap->Free(TexArrays[i][j][k].Memory);
+            TexArrays[i][j].clear();
+            FreeTextures[i][j].clear();
+        }
     }
     TexCache.clear();
 
@@ -641,14 +646,18 @@ DekoRenderer::TexCacheEntry& DekoRenderer::GetTexture(u32 texParam, u32 palBase)
     if (it != TexCache.end())
         return it->second;
 
-    u32 width = TextureWidth(texParam);
-    u32 height = TextureHeight(texParam);
+    u32 widthLog2 = (texParam >> 20) & 0x7;
+    u32 heightLog2 = (texParam >> 23) & 0x7;
+    u32 width = 8 << widthLog2;
+    u32 height = 8 << heightLog2;
 
     u32 addr = (texParam & 0xFFFF) * 8;
 
     TexCacheEntry entry = {0};
 
     entry.TextureRAMStart[0] = addr;
+    entry.WidthLog2 = widthLog2;
+    entry.HeightLog2 = heightLog2;
 
     // apparently a new texture
     if (fmt == 7)
@@ -727,28 +736,59 @@ DekoRenderer::TexCacheEntry& DekoRenderer::GetTexture(u32 texParam, u32 palBase)
         }
     }
 
-    assert(FreeImageDescriptorsCount > 0);
-    entry.ImageDescriptor = FreeImageDescriptors[--FreeImageDescriptorsCount];
+    auto& texArrays = TexArrays[widthLog2][heightLog2];
+    auto& freeTextures = FreeTextures[widthLog2][heightLog2];
 
-    dk::Image image;
+    if (freeTextures.size() == 0)
+    {
+        texArrays.resize(texArrays.size()+1);
+        TexArray& array = texArrays[texArrays.size()-1];
 
-    dk::ImageLayout imageLayout;
-    dk::ImageLayoutMaker{Gfx::Device}
-        .setFormat(DkImageFormat_RGBA8_Uint)
-        .setDimensions(width, height)
-        .initialize(imageLayout);
+        u32 layers = std::min<u32>((8*1024*1024) / (width*height*4), 64);
 
-    entry.Memory = Gfx::TextureHeap->Alloc(imageLayout.getSize(), imageLayout.getAlignment());
-    image.initialize(imageLayout, Gfx::TextureHeap->MemBlock, entry.Memory.Offset);
+        // allocate new array texture
+        dk::ImageLayout imageLayout;
+        dk::ImageLayoutMaker{Gfx::Device}
+            .setType(DkImageType_2DArray)
+            .setFormat(DkImageFormat_RGBA8_Uint)
+            .setDimensions(width, height, layers)
+            .initialize(imageLayout);
 
-    UploadBuf.UploadAndCopyTexture(Gfx::EmuCmdBuf, image, (u8*)TextureDecodingBuffer, 0, 0, width, height, width*4);
+        assert(FreeImageDescriptorsCount > 0);
+        array.ImageDescriptor = FreeImageDescriptors[--FreeImageDescriptorsCount];
 
-    dk::ImageDescriptor descriptor;
-    descriptor.initialize(image);
-    DkGpuAddr descriptors = Gfx::DataHeap->GpuAddr(ImageDescriptors);
-    EmuCmdBuf.pushData(descriptors + (descriptorOffset_TexcacheStart + entry.ImageDescriptor) * sizeof(DkImageDescriptor),
-        &descriptor,
-        sizeof(DkImageDescriptor));
+        array.Memory = Gfx::TextureHeap->Alloc(imageLayout.getSize(), imageLayout.getAlignment());
+        array.Image.initialize(imageLayout, Gfx::TextureHeap->MemBlock, array.Memory.Offset);
+
+        dk::ImageDescriptor descriptor;
+        descriptor.initialize(array.Image);
+        DkGpuAddr descriptors = Gfx::DataHeap->GpuAddr(ImageDescriptors);
+        EmuCmdBuf.pushData(descriptors + (descriptorOffset_TexcacheStart + array.ImageDescriptor) * sizeof(DkImageDescriptor),
+            &descriptor,
+            sizeof(DkImageDescriptor));
+
+        //printf("allocating new layer set for %d %d %d %d\n", width, height, texArrays.size()-1, array.ImageDescriptor);
+
+        for (u16 i = 0; i < layers; i++)
+        {
+            freeTextures.push_back(TexArrayEntry{(u16)(texArrays.size()-1), i});
+        }
+    }
+
+    TexArrayEntry storagePlace = freeTextures[freeTextures.size()-1];
+    freeTextures.pop_back();
+
+    TexArray& array = texArrays[storagePlace.TexArrayIdx];
+    //printf("using storage place %d %d | %d %d (%d)\n", width, height, storagePlace.TexArrayIdx, storagePlace.LayerIdx, array.ImageDescriptor);
+
+    UploadBuf.UploadAndCopyTexture(Gfx::EmuCmdBuf, array.Image,
+        (u8*)TextureDecodingBuffer,
+        0, 0, width, height,
+        width*4,
+        storagePlace.LayerIdx);
+
+    entry.DescriptorIdx = array.ImageDescriptor;
+    entry.Texture = storagePlace;
 
     return TexCache.emplace(std::make_pair(key, entry)).first->second;
 }
@@ -828,8 +868,7 @@ void DekoRenderer::RenderFrame()
             it++;
             continue;
         invalidate:
-            Gfx::TextureHeap->Free(entry.Memory);
-            FreeImageDescriptors[FreeImageDescriptorsCount++] = entry.ImageDescriptor;
+            FreeTextures[entry.WidthLog2][entry.HeightLog2].push_back(entry.Texture);
 
             //printf("invalidating texture %d\n", entry.ImageDescriptor);
 
@@ -846,7 +885,7 @@ void DekoRenderer::RenderFrame()
 
     u32 curSlice = CmdMem.Begin(EmuCmdBuf);
 
-    u32 numVariants = 0, prevVariant;
+    u32 numVariants = 0, prevVariant, prevTexLayer;
     Variant variants[MaxVariants];
 
     int foundviatexcache = 0, foundviaprev = 0, numslow = 0;
@@ -896,7 +935,8 @@ void DekoRenderer::RenderFrame()
                 bool mirrorS = (polygon->TexParam >> 18) & 1;
                 bool mirrorT = (polygon->TexParam >> 19) & 1;
                 variant.Sampler = (wrapS ? (mirrorS ? 2 : 1) : 0) + (wrapT ? (mirrorT ? 2 : 1) : 0) * 3;
-                variant.Texture = texcacheEntry->ImageDescriptor;
+                variant.Texture = texcacheEntry->DescriptorIdx;
+                prevTexLayer = texcacheEntry->Texture.LayerIdx;
                 if (texcacheEntry->LastVariant < numVariants && variants[texcacheEntry->LastVariant] == variant)
                 {
                     foundVariant = true;
@@ -931,6 +971,7 @@ void DekoRenderer::RenderFrame()
             }
         }
         RenderPolygons[i].Variant = prevVariant;
+        RenderPolygons[i].TextureLayer = (float)prevTexLayer;
 
         if (polygon->FacingView)
         {
