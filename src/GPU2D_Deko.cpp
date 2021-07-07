@@ -257,6 +257,8 @@ void DekoRenderer::Reset()
             LastBGRotD[i][j] = 0;
         }
     }
+
+    memset(OAMShadow, 0, sizeof(OAMShadow));
 }
 
 void DekoRenderer::DrawScanline(u32 line, Unit* unit)
@@ -613,6 +615,11 @@ void DekoRenderer::DrawSprites(u32 line, Unit* unit)
 
     if (uploadBarrier)
         EmuCmdBuf.barrier(DkBarrier_Full, DkInvalidateFlags_Image);
+
+    if (oamDirty)
+    {
+        memcpy(&OAMShadow[num ? 0x400 : 0], &GPU::OAM[num ? 0x400 : 0], 0x400);
+    }
 
     OBJBatchLinesCount[num]++;
 
@@ -1308,7 +1315,10 @@ void DekoRenderer::FlushOBJDraw(u32 curline)
         return;
     }
 
-    u16* oam = (u16*)&GPU::OAM[CurUnit->Num ? 0x400 : 0];
+    if (OBJBatchLinesCount[CurUnit->Num] == 0)
+        return;
+
+    u16* oam = (u16*)&OAMShadow[CurUnit->Num ? 0x400 : 0];
 
     enum
     {
@@ -1514,9 +1524,9 @@ void DekoRenderer::FlushOBJDraw(u32 curline)
         if (sprite.Y + sprite.Height <= firstLine)
             continue;
 
-        if (sprite.X < -sprite.Width)
+        if (sprite.X + sprite.Width <= 0)
             continue;
-        if (sprite.Y < -sprite.Height)
+        if (sprite.X >= 256)
             continue;
 
         numSprites[spriteKind]++;

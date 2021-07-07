@@ -258,6 +258,8 @@ private:
 
     u16 DirectBitmap[2][256*192];
 
+    u8 OAMShadow[2*1024];
+
     template<u32 bgmode> void DrawScanlineBGMode(u32 line);
     void DrawScanlineBGMode6(u32 line);
     void DrawScanlineBGMode7(u32 line);
