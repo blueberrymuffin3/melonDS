@@ -294,7 +294,7 @@ void DoGui(BoxGui::Frame& parent)
             bool literalOptimisations = Config::JIT_LiteralOptimisations;
             bool fastMemory = Config::JIT_FastMemory;
 
-            DoCheckbox(settingsFrame, settingsSkewer, "Enable JIT reompiler", jitEnable, true);
+            DoCheckbox(settingsFrame, settingsSkewer, "Enable JIT recompiler", jitEnable, true);
             if (jitEnable)
             {
                 DoSlider(settingsFrame, settingsSkewer, "Maximum block size", Config::JIT_MaxBlockSize, 1, 32);
