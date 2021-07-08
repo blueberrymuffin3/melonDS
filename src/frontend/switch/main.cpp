@@ -683,16 +683,22 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
             if (LidClosed != NDS::IsLidClosed())
                 NDS::SetLidClosed(LidClosed);
 
-            u64 frameStart = armGetSystemTick();
-            NDS::RunFrame();
-            u64 frameLength = armTicksToNs(armGetSystemTick() - frameStart);
+            bool fastForward = Config::TouchscreenMode < 2
+                && (PlatformKeysHeld & (Config::LeftHandedMode ? HidNpadButton_ZR : HidNpadButton_ZL));
+            u64 totalFrameLength = 0;
+            do
+            {
+                u64 frameStart = armGetSystemTick();
+                NDS::RunFrame();
+                u64 frameLength = armTicksToNs(armGetSystemTick() - frameStart);
+                FrametimeHistogram[FrametimeHistogramNextValue] = (float)frameLength * 0.000001f;
+                FrametimeHistogramNextValue++;
+                if (FrametimeHistogramNextValue >= FrametimeHistogramLen)
+                    FrametimeHistogramNextValue = 0;
 
-            //svcSleepThread(1000*1000*500);
-
-            FrametimeHistogram[FrametimeHistogramNextValue] = (float)frameLength * 0.000001f;
-            FrametimeHistogramNextValue++;
-            if (FrametimeHistogramNextValue >= FrametimeHistogramLen)
-                FrametimeHistogramNextValue = 0;
+                totalFrameLength += frameLength;
+                //svcSleepThread(1000*1000*500);
+            } while ((!Config::LimitFramerate || fastForward) && totalFrameLength < 1000000000/60);
         }
     }
 
