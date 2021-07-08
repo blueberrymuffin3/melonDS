@@ -46,7 +46,7 @@ target_include_directories(melonDS.elf PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_include_directories(melonDS.elf PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 
 add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/control.nacp
-                   COMMAND ${NACPTOOL} --create "melonDS switch fast alpha" "Arisotura, RSDuck, Hydr8gon" "release 5" ${CMAKE_BINARY_DIR}/control.nacp)
+                   COMMAND ${NACPTOOL} --create "melonDS switch fast alpha" "Arisotura, RSDuck, Hydr8gon" "release 6" ${CMAKE_BINARY_DIR}/control.nacp)
 
 make_directory(${CMAKE_BINARY_DIR}/romfs/shaders)
 
