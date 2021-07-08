@@ -132,6 +132,17 @@ DekoRenderer::DekoRenderer() :
     DisabledBGMemory = Gfx::TextureHeap->Alloc(disabledBGLayout.getSize(), disabledBGLayout.getAlignment());
     DisabledBG.initialize(disabledBGLayout, Gfx::TextureHeap->MemBlock, DisabledBGMemory.Offset);
 
+    dk::ImageLayout mosaicTableLayout;
+    dk::ImageLayoutMaker{Gfx::Device}
+        .setType(DkImageType_2D)
+        .setDimensions(256, 16)
+        .setFormat(DkImageFormat_R8_Uint)
+        .setFlags(DkImageFlags_PitchLinear)
+        .setPitchStride(256)
+        .initialize(mosaicTableLayout);
+    MosaicTableMemory = Gfx::TextureHeap->Alloc(mosaicTableLayout.getSize(), mosaicTableLayout.getAlignment());
+    MosaicTable.initialize(mosaicTableLayout, Gfx::TextureHeap->MemBlock, MosaicTableMemory.Offset);
+
     ImageDescriptors = Gfx::DataHeap->Alloc(sizeof(dk::ImageDescriptor)*descriptorOffset_Count, DK_IMAGE_DESCRIPTOR_ALIGNMENT);
     dk::ImageDescriptor* imageDescriptors = Gfx::DataHeap->CpuAddr<dk::ImageDescriptor>(ImageDescriptors);
     for (u32 i = 0; i < fb_Count*2; i++)
@@ -149,6 +160,7 @@ DekoRenderer::DekoRenderer() :
     }
     imageDescriptors[descriptorOffset_3DFramebuffer].initialize(dk::ImageView{_3DFramebuffer});
     imageDescriptors[descriptorOffset_DisabledBG].initialize(dk::ImageView{DisabledBG});
+    imageDescriptors[descriptorOffset_MosaicTable].initialize(dk::ImageView{MosaicTable});
 
     SamplerDescriptors = Gfx::DataHeap->Alloc(sizeof(dk::SamplerDescriptor), DK_SAMPLER_DESCRIPTOR_ALIGNMENT);
     Gfx::DataHeap->CpuAddr<dk::SamplerDescriptor>(SamplerDescriptors)->initialize(dk::Sampler{});
@@ -157,12 +169,18 @@ DekoRenderer::DekoRenderer() :
     Gfx::LoadShader("romfs:/shaders/ComposeBGOBJ_fsh.dksh", ShaderComposeBGOBJ);
     Gfx::LoadShader("romfs:/shaders/ComposeBGOBJDirectBitmapOnly_fsh.dksh", ShaderComposeBGOBJDirectBitmapOnly);
     Gfx::LoadShader("romfs:/shaders/ComposeBGOBJShowBitmap_fsh.dksh", ShaderComposeBGOBJShowBitmap);
-    Gfx::LoadShader("romfs:/shaders/BGText4bpp_fsh.dksh", ShaderBGText4Bpp);
-    Gfx::LoadShader("romfs:/shaders/BGText8bpp_fsh.dksh", ShaderBGText8Bpp);
-    Gfx::LoadShader("romfs:/shaders/BGAffine_fsh.dksh", ShaderBGAffine);
-    Gfx::LoadShader("romfs:/shaders/BGExtendedBitmap8bpp_fsh.dksh", ShaderBGExtendedBitmap8pp);
-    Gfx::LoadShader("romfs:/shaders/BGExtendedBitmapDirect_fsh.dksh", ShaderBGExtendedBitmapDirect);
-    Gfx::LoadShader("romfs:/shaders/BGExtendedMixed_fsh.dksh", ShaderBGExtendedMixed);
+    Gfx::LoadShader("romfs:/shaders/BGText4bpp_fsh.dksh", ShaderBGText4Bpp[0]);
+    Gfx::LoadShader("romfs:/shaders/BGText4bppMosaic_fsh.dksh", ShaderBGText4Bpp[1]);
+    Gfx::LoadShader("romfs:/shaders/BGText8bpp_fsh.dksh", ShaderBGText8Bpp[0]);
+    Gfx::LoadShader("romfs:/shaders/BGText8bppMosaic_fsh.dksh", ShaderBGText8Bpp[1]);
+    Gfx::LoadShader("romfs:/shaders/BGAffine_fsh.dksh", ShaderBGAffine[0]);
+    Gfx::LoadShader("romfs:/shaders/BGAffineMosaic_fsh.dksh", ShaderBGAffine[1]);
+    Gfx::LoadShader("romfs:/shaders/BGExtendedBitmap8bpp_fsh.dksh", ShaderBGExtendedBitmap8pp[0]);
+    Gfx::LoadShader("romfs:/shaders/BGExtendedBitmap8bppMosaic_fsh.dksh", ShaderBGExtendedBitmap8pp[1]);
+    Gfx::LoadShader("romfs:/shaders/BGExtendedBitmapDirect_fsh.dksh", ShaderBGExtendedBitmapDirect[0]);
+    Gfx::LoadShader("romfs:/shaders/BGExtendedBitmapDirectMosaic_fsh.dksh", ShaderBGExtendedBitmapDirect[1]);
+    Gfx::LoadShader("romfs:/shaders/BGExtendedMixed_fsh.dksh", ShaderBGExtendedMixed[0]);
+    Gfx::LoadShader("romfs:/shaders/BGExtendedMixedMosaic_fsh.dksh", ShaderBGExtendedMixed[1]);
     Gfx::LoadShader("romfs:/shaders/OBJRegular_vsh.dksh", ShaderOBJRegular);
     Gfx::LoadShader("romfs:/shaders/OBJAffine_vsh.dksh", ShaderOBJAffine);
     Gfx::LoadShader("romfs:/shaders/OBJ4bpp_fsh.dksh", ShaderOBJ4bpp);
@@ -179,8 +197,19 @@ DekoRenderer::DekoRenderer() :
         CmdMem.Begin(EmuCmdBuf);
         u8 disabledBGData[8*8] = {0};
         UploadBuf.UploadAndCopyTexture(EmuCmdBuf, DisabledBG, disabledBGData, 0, 0, 8, 8, 8);
+        u8 mosaicTable[256*16] = {0};
+        for (int m = 0; m < 16; m++)
+        {
+            for (int x = 0; x < 256; x++)
+            {
+                int offset = x - (x % (m+1));
+                mosaicTable[m*256+x] = offset;
+            }
+        }
+        UploadBuf.UploadAndCopyTexture(EmuCmdBuf, MosaicTable, mosaicTable, 0, 0, 256, 16, 256);
         EmuQueue.submitCommands(CmdMem.End(EmuCmdBuf));
         EmuQueue.waitIdle();
+        UploadBuf.LastFlushBuffer = 0;
     }
 }
 
@@ -238,6 +267,8 @@ void DekoRenderer::Reset()
         LastMasterBrightness[i] = 0;
         LastForceBlank[i] = false;
         DirectBitmapNeeded[i] = false;
+        LastBGMosaicSizeX[0] = 0;
+        LastBGMosaicYMax[0] = 0;
 
         for (int j = 0; j < 4; j++)
         {
@@ -335,9 +366,11 @@ void DekoRenderer::DrawScanline(u32 line, Unit* unit)
         if ((LastDispCnt[num] ^ CurUnit->DispCnt) & 0x31F84)
             compositionDirty = true;
 
+        bool mosaicChanged = LastBGMosaicYMax[num] != CurUnit->BGMosaicYMax
+            || LastBGMosaicSizeX[num] != CurUnit->BGMosaicSize[0];
         for (int i = 0; i < 4; i++)
         {
-            if ((LastBGCnt[num][i] ^ CurUnit->BGCnt[i]) & 0xFFFC)
+            if (((LastBGCnt[num][i] ^ CurUnit->BGCnt[i]) & 0xFFFC) || (LastBGCnt[num][i] & 0x0040 && mosaicChanged))
                 bgmask |= 1 << i;
             if ((LastBGCnt[num][i] ^ CurUnit->BGCnt[i]) & 0x3)
                 compositionDirty = true;
@@ -414,6 +447,8 @@ void DekoRenderer::DrawScanline(u32 line, Unit* unit)
         LastDispCnt[num] = CurUnit->DispCnt;
         for (int i = 0; i < 4; i++)
             LastBGCnt[num][i] = CurUnit->BGCnt[i];
+        LastBGMosaicSizeX[num] = CurUnit->BGMosaicSize[0];
+        LastBGMosaicYMax[num] = CurUnit->BGMosaicYMax;
 
         if (compositionDirty)
         {
@@ -921,6 +956,15 @@ void DekoRenderer::DrawScanline_BGOBJ(u32 line)
     case 7: DrawScanlineBGMode7(line); break;
     }
 
+    if (CurUnit->BGMosaicY >= CurUnit->BGMosaicYMax)
+    {
+        CurUnit->BGMosaicY = 0;
+        CurUnit->BGMosaicYMax = CurUnit->BGMosaicSize[1];
+    }
+    else
+    {
+        CurUnit->BGMosaicY++;
+    }
 }
 
 template<u32 bgmode>
@@ -1052,6 +1096,12 @@ void DekoRenderer::DrawBG_Text(u32 line, u32 bgnum)
     u16 xoff = CurUnit->BGXPos[bgnum];
     u16 yoff = CurUnit->BGYPos[bgnum] + line;
 
+    if (bgcnt & 0x0040)
+    {
+        // vertical mosaic
+        yoff -= CurUnit->BGMosaicY;
+    }
+
     BGUniform& uniform = BGTextUniforms[CurUnit->Num][bgnum];
 
     u32 tilemapaddr;
@@ -1136,6 +1186,13 @@ void DekoRenderer::DrawBG_Affine(u32 line, u32 bgnum)
     CurUnit->BGXRefInternal[bgnum-2] += rotB;
     CurUnit->BGYRefInternal[bgnum-2] += rotD;
 
+    if (bgcnt & 0x0040)
+    {
+        // vertical mosaic
+        rotX -= (CurUnit->BGMosaicY * rotB);
+        rotY -= (CurUnit->BGMosaicY * rotD);
+    }
+
     uniform.PerLineData[line*4+0] = (u32)rotX;
     uniform.PerLineData[line*4+1] = (u32)rotY;
     uniform.PerLineData[line*4+2] = (u32)(s32)rotA;
@@ -1171,6 +1228,13 @@ void DekoRenderer::DrawBG_Extended(u32 line, u32 bgnum)
 
     CurUnit->BGXRefInternal[bgnum-2] += rotB;
     CurUnit->BGYRefInternal[bgnum-2] += rotD;
+
+    if (bgcnt & 0x0040)
+    {
+        // vertical mosaic
+        rotX -= (CurUnit->BGMosaicY * rotB);
+        rotY -= (CurUnit->BGMosaicY * rotD);
+    }
 
     BGUniform& uniform = BGTextUniforms[CurUnit->Num][bgnum];
 
@@ -1289,15 +1353,22 @@ void DekoRenderer::DrawBG_Large(u32 line)
     s32 rotX = CurUnit->BGXRefInternal[0];
     s32 rotY = CurUnit->BGYRefInternal[0];
 
+    CurUnit->BGXRefInternal[0] += rotB;
+    CurUnit->BGYRefInternal[0] += rotD;
+
+    if (bgcnt & 0x0040)
+    {
+        // vertical mosaic
+        rotX -= (CurUnit->BGMosaicY * rotB);
+        rotY -= (CurUnit->BGMosaicY * rotD);
+    }
+
     uniform.PerLineData[line*4+0] = (u32)rotX;
     uniform.PerLineData[line*4+1] = (u32)rotY;
     uniform.PerLineData[line*4+2] = (u32)(s32)rotA;
     uniform.PerLineData[line*4+3] = (u32)(s32)rotC;
 
     uniform.Affine.BGVRAMMask = CurUnit->Num ? 0x1FFFF : 0x7FFFF;
-
-    CurUnit->BGXRefInternal[0] += rotB;
-    CurUnit->BGYRefInternal[0] += rotD;
 
     BGState[CurUnit->Num][2] = bgState_ExtendedBitmap8bpp;
 }
@@ -1690,7 +1761,8 @@ void DekoRenderer::FlushBGDraw(u32 curline, u32 bgmask)
     EmuCmdBuf.bindTextures(DkStage_Fragment, 0,
     {
         dkMakeTextureHandle(descriptorOffset_VRAM8 + textureVRAM_ABG + CurUnit->Num, 0),
-        dkMakeTextureHandle(descriptorOffset_VRAM16 + textureVRAM_ABG + CurUnit->Num, 0)
+        dkMakeTextureHandle(descriptorOffset_VRAM16 + textureVRAM_ABG + CurUnit->Num, 0),
+        dkMakeTextureHandle(descriptorOffset_MosaicTable, 0)
     });
     EmuCmdBuf.bindUniformBuffer(DkStage_Fragment, 0, Gfx::DataHeap->GpuAddr(BGUniformMemory), BGUniformSize);
     EmuCmdBuf.bindDepthStencilState(dk::DepthStencilState{}
@@ -1705,14 +1777,19 @@ void DekoRenderer::FlushBGDraw(u32 curline, u32 bgmask)
         {
             assert(linesCount > 0);
             assert(firstLine != -1);
-            if (BGState[CurUnit->Num][i] >= bgState_Text4bpp)
+            int state = BGState[CurUnit->Num][i];
+            if (state >= bgState_Text4bpp)
             {
                 BGOBJRedrawn[CurUnit->Num] |= (1 << i);
                 dk::ImageView colorTarget{IntermedFramebuffers[fb_Count * CurUnit->Num + fb_BG0 + i]};
                 EmuCmdBuf.bindRenderTargets({&colorTarget});
                 EmuCmdBuf.setScissors(0, {DkScissor{0, (u32)firstLine, 256, (u32)linesCount}});
 
-                //printf("drawing bg range %d %d\n", firstLine, linesCount);
+                u32 mosaicLevel = LastBGCnt[CurUnit->Num][i] & 0x0040 ? LastBGMosaicSizeX[CurUnit->Num] : 0;
+
+                BGTextUniforms[CurUnit->Num][i].Text.MosaicLevel = mosaicLevel;
+
+                //printf("drawing bg range %d %d %d\n", firstLine, linesCount, mosaicLevel);
                 EmuCmdBuf.pushConstants(Gfx::DataHeap->GpuAddr(BGUniformMemory), BGUniformSize,
                     offsetof(BGUniform, Text), sizeof(BGUniform::Text),
                     &BGTextUniforms[CurUnit->Num][i].Text);
@@ -1723,14 +1800,18 @@ void DekoRenderer::FlushBGDraw(u32 curline, u32 bgmask)
                 {
                     NULL,
                     NULL,
-                    &ShaderBGText4Bpp,
-                    &ShaderBGText8Bpp,
-                    &ShaderBGAffine,
-                    &ShaderBGExtendedBitmap8pp,
-                    &ShaderBGExtendedBitmapDirect,
-                    &ShaderBGExtendedMixed
+                    ShaderBGText4Bpp,
+                    ShaderBGText8Bpp,
+                    ShaderBGAffine,
+                    ShaderBGExtendedBitmap8pp,
+                    ShaderBGExtendedBitmapDirect,
+                    ShaderBGExtendedMixed
                 };
-                EmuCmdBuf.bindShaders(DkStageFlag_GraphicsMask, {&ShaderFullscreenQuad, shaders[BGState[CurUnit->Num][i]]});
+                EmuCmdBuf.bindShaders(DkStageFlag_GraphicsMask,
+                {
+                    &ShaderFullscreenQuad,
+                    &shaders[state][mosaicLevel > 0]
+                });
                 EmuCmdBuf.draw(DkPrimitive_TriangleStrip, 4, 1, 0, 0);
             }
 

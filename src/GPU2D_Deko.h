@@ -69,6 +69,9 @@ private:
     dk::Image DisabledBG;
     GpuMemHeap::Allocation DisabledBGMemory;
 
+    dk::Image MosaicTable;
+    GpuMemHeap::Allocation MosaicTableMemory;
+
     enum
     {
         textureVRAM_ABG,
@@ -87,6 +90,7 @@ private:
         descriptorOffset_DirectBitmap = descriptorOffset_Palettes+2,
         descriptorOffset_3DFramebuffer = descriptorOffset_DirectBitmap+2,
         descriptorOffset_DisabledBG,
+        descriptorOffset_MosaicTable,
         descriptorOffset_OBJWindow,
         descriptorOffset_Count = descriptorOffset_OBJWindow+2
     };
@@ -114,12 +118,12 @@ private:
     GpuMemHeap::Allocation OBJUniformMemory;
 
     dk::Shader ShaderFullscreenQuad;
-    dk::Shader ShaderBGText4Bpp;
-    dk::Shader ShaderBGText8Bpp;
-    dk::Shader ShaderBGAffine;
-    dk::Shader ShaderBGExtendedBitmap8pp;
-    dk::Shader ShaderBGExtendedBitmapDirect;
-    dk::Shader ShaderBGExtendedMixed;
+    dk::Shader ShaderBGText4Bpp[2];
+    dk::Shader ShaderBGText8Bpp[2];
+    dk::Shader ShaderBGAffine[2];
+    dk::Shader ShaderBGExtendedBitmap8pp[2];
+    dk::Shader ShaderBGExtendedBitmapDirect[2];
+    dk::Shader ShaderBGExtendedMixed[2];
     dk::Shader ShaderComposeBGOBJ;
     dk::Shader ShaderComposeBGOBJDirectBitmapOnly;
     dk::Shader ShaderComposeBGOBJShowBitmap;
@@ -175,13 +179,13 @@ private:
             {
                 u32 TilesetAddr, WideXMask, BGVRAMMask, BasePalette;
                 u32 MetaMask, ExtpalMask, __pad1, __pad2;
-                u32 __pad3, __pad4, __pad5, __pad6;
+                u32 __pad3, __pad4, __pad5, MosaicLevel;
             } Text;
             struct
             {
                 u32 TilesetAddr, TilemapAddr, BGVRAMMask, YShift;
                 u32 XMask, YMask, OfxMask, OfyMask;
-                u32 MetaMask, ExtPalMask, __pad2, __pad3;
+                u32 MetaMask, ExtPalMask, __pad2, MosaicLevel;
             } Affine;
         };
 
@@ -247,6 +251,8 @@ private:
     s16 LastBGRotD[2][2];
     u32 LastDispCnt[2];
     u16 LastBGCnt[2][4];
+    u8 LastBGMosaicSizeX[2];
+    u8 LastBGMosaicYMax[2];
 
     u16 LastBlendCnt[2];
     u16 LastMasterBrightness[2];

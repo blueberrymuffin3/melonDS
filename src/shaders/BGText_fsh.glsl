@@ -2,23 +2,28 @@
 
 #cmakedefine Text8bpp
 #cmakedefine Text4bpp
+#cmakedefine Mosaic
 
 layout (binding = 0) uniform usamplerBuffer BGVRAM8;
 layout (binding = 1) uniform usamplerBuffer BGVRAM16;
+layout (binding = 2) uniform usampler2D MosaicTable;
 
 layout (location = 0) out uint FinalColor;
 
 layout (std140, binding = 0) uniform BGUniform
 {
     uint TilesetAddr, WideXMask, BGVRAMMask, BasePalette;
-    uint MetaMask, ExtPalMask;
-    uvec4 __pad;
+    uint MetaMask, ExtPalMask, pad0, pad1;
+    uint pad2, pad3, pad4, MosaicLevel;
     uvec4 PerLineData[192]; // xoff, yoff, tilemapaddr
 };
 
 void main()
 {
     uvec2 position = uvec2(gl_FragCoord.xy);
+#ifdef Mosaic
+    position.x = int(texelFetch(MosaicTable, ivec2(position.x, int(MosaicLevel)), 0).x);
+#endif
 
     uvec4 perLineData = PerLineData[position.y];
 

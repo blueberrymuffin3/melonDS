@@ -4,9 +4,11 @@
 #cmakedefine ExtendedBitmap8bpp
 #cmakedefine ExtendedBitmapDirectColor
 #cmakedefine ExtendedMixed
+#cmakedefine Mosaic
 
 layout (binding = 0) uniform usamplerBuffer BGVRAM8;
 layout (binding = 1) uniform usamplerBuffer BGVRAM16;
+layout (binding = 2) uniform usampler2D MosaicTable;
 
 layout (location = 0) out uint FinalColor;
 
@@ -14,13 +16,17 @@ layout (std140, binding = 0) uniform BGUniform
 {
     int TilesetAddr, TilemapAddr, BGVRAMMask, YShift;
     int XMask, YMask, OfxMask, OfyMask;
-    uint MetaMask, ExtPalMask;
+    uint MetaMask, ExtPalMask, pad0, MosaicLevel;
     ivec4 PerLineData[192]; // rotX, rotY, rotA, rotC
 };
 
 void main()
 {
     ivec2 position = ivec2(gl_FragCoord.xy);
+
+#ifdef Mosaic
+    position.x = int(texelFetch(MosaicTable, ivec2(position.x, int(MosaicLevel)), 0).x);
+#endif
 
     ivec4 perLineData = PerLineData[position.y];
 
