@@ -286,6 +286,7 @@ void DekoRenderer::Reset()
             LastBGRotB[i][j] = 0;
             LastBGRotC[i][j] = 0;
             LastBGRotD[i][j] = 0;
+            AffineChangedMidframe[i][j] = false;
         }
     }
 
@@ -311,7 +312,7 @@ void DekoRenderer::DrawScanline(u32 line, Unit* unit)
     bool uploadBarrier = false;
     {
         u32 bgmask = 0;
-        bool compositionDirty = line == 0;
+        bool compositionDirty = n3dline == 0;
         ComposeRegion composeRegion = {0};
 
         for (int i = 0; i < 4; i++)
@@ -327,8 +328,12 @@ void DekoRenderer::DrawScanline(u32 line, Unit* unit)
         }
         for (int i = 0; i < 2; i++)
         {
-            if (LastBGXRef[num][i] != CurUnit->BGXRef[i] ||
-                LastBGYRef[num][i] != CurUnit->BGYRef[i] ||
+            bool originChanged = LastBGXRef[num][i] != CurUnit->BGXRef[i]
+                || LastBGYRef[num][i] != CurUnit->BGYRef[i];
+
+            AffineChangedMidframe[num][i] |= originChanged && n3dline > 0;
+
+            if (originChanged ||
                 LastBGRotA[num][i] != CurUnit->BGRotA[i] ||
                 LastBGRotB[num][i] != CurUnit->BGRotB[i] ||
                 LastBGRotC[num][i] != CurUnit->BGRotC[i] ||
@@ -571,9 +576,17 @@ void DekoRenderer::DrawScanline(u32 line, Unit* unit)
         // flush all backgrounds
         FlushBGDraw(n3dline + 1, 0xF);
 
-        for (int i = 0; i < 4; i++)
-        {
+        for (int i = 0; i < 2; i++)
             BGBatchFirstLine[num][i] = (renderFull & (1<<i)) ? -1 : 0;
+        for (int i = 2; i < 4; i++)
+        {
+            // if the affine reference is changed midframe the rest of the frame
+            // will be rendered based of that value starting from that line
+            // but during the next frame that value will be the value of the internal register
+            // on the first line
+            // so that frame will be different
+            BGBatchFirstLine[num][i] = (renderFull & (1<<i)) && !AffineChangedMidframe[num][i-2] ? -1 : 0;
+            AffineChangedMidframe[num][i-2] = false;
         }
 
         if (unit->Num == 0)

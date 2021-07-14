@@ -254,6 +254,8 @@ private:
     u8 LastBGMosaicSizeX[2];
     u8 LastBGMosaicYMax[2];
 
+    bool AffineChangedMidframe[2][2];
+
     u16 LastBlendCnt[2];
     u16 LastMasterBrightness[2];
     u8 LastEVA[2], LastEVB[2], LastEVY[2];
