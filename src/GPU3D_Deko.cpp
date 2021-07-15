@@ -8,6 +8,9 @@
 #include <assert.h>
 #include <switch.h>
 
+#define XXH_STATIC_LINKING_ONLY
+#include "xxhash/xxhash.h"
+
 #include <arm_neon.h>
 
 using Gfx::EmuCmdBuf;
@@ -635,9 +638,10 @@ DekoRenderer::TexCacheEntry& DekoRenderer::GetTexture(u32 texParam, u32 palBase)
     if (fmt != 7)
     {
         key |= (u64)palBase << 32;
-        if (fmt != 5)
+        if (fmt == 5)
             key &= ~((u64)1 << 29);
     }
+    //printf("%" PRIx64 " %" PRIx32 " %" PRIx32 "\n", key, texParam, palBase);
 
     assert(fmt != 0 && "no texture is not a texture format!");
 
@@ -724,6 +728,8 @@ DekoRenderer::TexCacheEntry& DekoRenderer::GetTexture(u32 texParam, u32 palBase)
         u8* texData = &GPU::VRAMFlat_Texture[addr];
         u16* palData = (u16*)(GPU::VRAMFlat_TexPal + palAddr);
 
+        //assert(entry.TexPalStart+entry.TexPalSize <= 128*1024*1024);
+
         bool color0Transparent = texParam & (1 << 29);
 
         switch (fmt)
@@ -735,6 +741,14 @@ DekoRenderer::TexCacheEntry& DekoRenderer::GetTexture(u32 texParam, u32 palBase)
         case 4: ConvertNColorsTexture<outputFmt_RGB6A5, 8>(width, height, TextureDecodingBuffer, texData, palData, color0Transparent); break;
         }
     }
+
+    for (int i = 0; i < 2; i++)
+    {
+        if (entry.TextureRAMSize[i])
+            entry.TextureHash[i] = XXH3_64bits(&GPU::VRAMFlat_Texture[entry.TextureRAMStart[i]], entry.TextureRAMSize[i]);
+    }
+    if (entry.TexPalSize)
+        entry.TexPalHash = XXH3_64bits(&GPU::VRAMFlat_TexPal[entry.TexPalStart], entry.TexPalSize);
 
     auto& texArrays = TexArrays[widthLog2][heightLog2];
     auto& freeTextures = FreeTextures[widthLog2][heightLog2];
@@ -846,7 +860,12 @@ void DekoRenderer::RenderFrame()
                     for (u32 j = startEntry; j < startEntry + entriesCount; j++)
                     {
                         if (GetRangedBitMask(j, startBit, bitsCount) & textureDirty.Data[j])
-                            goto invalidate;
+                        {
+                            u64 newTexHash = XXH3_64bits(&GPU::VRAMFlat_Texture[entry.TextureRAMStart[i]], entry.TextureRAMSize[i]);
+
+                            if (newTexHash != entry.TextureHash[i])
+                                goto invalidate;
+                        }
                     }
                 }
             }
@@ -861,7 +880,11 @@ void DekoRenderer::RenderFrame()
                 for (u32 j = startEntry; j < startEntry + entriesCount; j++)
                 {
                     if (GetRangedBitMask(j, startBit, bitsCount) & texPalDirty.Data[j])
-                        goto invalidate;
+                    {
+                        u64 newPalHash = XXH3_64bits(&GPU::VRAMFlat_TexPal[entry.TexPalStart], entry.TexPalSize);
+                        if (newPalHash != entry.TexPalHash)
+                            goto invalidate;
+                    }
                 }
             }
 

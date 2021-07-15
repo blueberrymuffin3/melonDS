@@ -28,8 +28,8 @@ DkGpuAddr UploadBuffer::UploadData(dk::CmdBuf cmdbuf, u32 size, u8* data)
     DkGpuAddr srcGpu = Gfx::DataHeap->GpuAddr(Buffers[CurBuffer]) + CurOffset;
     memcpy(srcCpu, data, size);
 
-    CurOffset += size + 31;
-    CurOffset &= ~31;
+    CurOffset += size + 63;
+    CurOffset &= ~63;
     return srcGpu;
 }
 

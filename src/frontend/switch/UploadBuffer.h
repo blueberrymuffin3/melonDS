@@ -16,7 +16,7 @@ public:
 
     u32 LastFlushBuffer = 0;
 private:
-    static const u32 SegmentSize = 8*1024*1024;
+    static const u32 SegmentSize = 16*1024*1024;
     GpuMemHeap::Allocation Buffers[3];
     dk::Fence Fences[3] = {};
     u32 CurBuffer = 0, CurOffset = 0;

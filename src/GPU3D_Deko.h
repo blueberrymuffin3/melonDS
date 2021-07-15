@@ -238,6 +238,9 @@ private:
         u32 TexPalStart, TexPalSize;
         u8 WidthLog2, HeightLog2;
         TexArrayEntry Texture;
+
+        u64 TextureHash[2];
+        u64 TexPalHash;
     };
     std::unordered_map<u64, TexCacheEntry> TexCache;
 
