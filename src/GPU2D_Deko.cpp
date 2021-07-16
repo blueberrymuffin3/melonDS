@@ -707,7 +707,7 @@ void DekoRenderer::DoCapture()
     u8* srcA = Gfx::DataHeap->CpuAddr<u8>(DisplayCaptureMemory);
 
     u32 srcBaddr;
-    u16* srcB;
+    u16* srcB = NULL;
 
     if (CaptureCnt & (1<<25))
     {
@@ -749,7 +749,7 @@ void DekoRenderer::DoCapture()
             source = 1;
     }
 
-    //printf("capturing %d %dx%d to %d (eva %d | evb %d) %p\n", source, width, height, dstvram, eva, evb, srcB);
+    //printf("capturing %d %dx%d to %d (eva %d | evb %d) %p %p\n", source, width, height, dstvram, eva, evb, srcA, srcB);
 
     switch (source)
     {
