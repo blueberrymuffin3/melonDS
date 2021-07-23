@@ -1493,9 +1493,9 @@ void DekoRenderer::FlushOBJDraw(u32 curline)
 
         if (spritemode == 3)
         {
-            if (CurUnit->DispCnt & 0x40)
+            if (LastDispCnt[CurUnit->Num] & 0x40)
             {
-                if (CurUnit->DispCnt & 0x20)
+                if (LastDispCnt[CurUnit->Num] & 0x20)
                 {
                     // 'reserved'
                     // draws nothing
@@ -1504,13 +1504,13 @@ void DekoRenderer::FlushOBJDraw(u32 curline)
                 }
                 else
                 {
-                    addr = tilenum << (7 + ((CurUnit->DispCnt >> 22) & 0x1));
-                    strideShift |= __builtin_ctz(width >> 8) + 1;
+                    addr = tilenum << (7 + ((LastDispCnt[CurUnit->Num] >> 22) & 0x1));
+                    strideShift |= __builtin_ctz(width) + 1;
                 }
             }
             else
             {
-                if (CurUnit->DispCnt & 0x20)
+                if (LastDispCnt[CurUnit->Num] & 0x20)
                 {
                     addr = ((tilenum & 0x01F) << 4) + ((tilenum & 0x3E0) << 7);
                     strideShift |= 9;
