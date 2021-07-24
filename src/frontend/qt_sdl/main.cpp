@@ -57,6 +57,7 @@
 #include "AudioSettingsDialog.h"
 #include "WifiSettingsDialog.h"
 #include "InterfaceSettingsDialog.h"
+#include "ROMInfoDialog.h"
 
 #include "types.h"
 #include "version.h"
@@ -65,6 +66,7 @@
 #include "OSD.h"
 
 #include "NDS.h"
+#include "NDSCart.h"
 #include "GBACart.h"
 #include "GPU.h"
 #include "SPU.h"
@@ -344,6 +346,7 @@ void EmuThread::run()
     videoSettingsDirty = false;
     videoSettings.Soft_Threaded = Config::Threaded3D != 0;
     videoSettings.GL_ScaleFactor = Config::GL_ScaleFactor;
+    videoSettings.GL_BetterPolygons = Config::GL_BetterPolygons;
 
 #ifdef OGLRENDERER_ENABLED
     if (hasOGL)
@@ -1331,6 +1334,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
         actSetupCheats = menu->addAction("Setup cheat codes");
         actSetupCheats->setMenuRole(QAction::NoRole);
         connect(actSetupCheats, &QAction::triggered, this, &MainWindow::onSetupCheats);
+
+        menu->addSeparator();
+        actROMInfo = menu->addAction("ROM Info");
+        connect(actROMInfo, &QAction::triggered, this, &MainWindow::onROMInfo);
     }
     {
         QMenu* menu = menubar->addMenu("Config");
@@ -1533,8 +1540,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent)
 
     actSetupCheats->setEnabled(false);
 
-
     actEnableCheats->setChecked(Config::EnableCheats != 0);
+
+    actROMInfo->setEnabled(false);
 
     actSavestateSRAMReloc->setChecked(Config::SavestateRelocSRAM != 0);
 
@@ -2198,6 +2206,8 @@ void MainWindow::onLoadState()
         if (slot > 0) sprintf(msg, "State loaded from slot %d", slot);
         else          sprintf(msg, "State loaded from file");
         OSD::AddMessage(0, msg);
+
+        actUndoStateLoad->setEnabled(true);
     }
     else
     {
@@ -2335,6 +2345,10 @@ void MainWindow::onCheatsDialogFinished(int res)
     emuThread->emuUnpause();
 }
 
+void MainWindow::onROMInfo()
+{
+    ROMInfoDialog* dlg = ROMInfoDialog::openDlg(this);
+}
 
 void MainWindow::onOpenEmuSettings()
 {
@@ -2589,6 +2603,8 @@ void MainWindow::onEmuStart()
     actImportSavefile->setEnabled(true);
 
     actSetupCheats->setEnabled(true);
+
+    actROMInfo->setEnabled(true);
 }
 
 void MainWindow::onEmuStop()
@@ -2609,6 +2625,8 @@ void MainWindow::onEmuStop()
     actFrameStep->setEnabled(false);
 
     actSetupCheats->setEnabled(false);
+
+    actROMInfo->setEnabled(false);
 }
 
 void MainWindow::onUpdateVideoSettings(bool glchange)

@@ -164,7 +164,6 @@ bool Running;
 
 bool RunningGame;
 
-
 void DivDone(u32 param);
 void SqrtDone(u32 param);
 void RunTimer(u32 tid, s32 cycles);
@@ -342,8 +341,13 @@ void SetupDirectBoot()
 {
     if (ConsoleType == 1)
     {
-        printf("!! DIRECT BOOT NOT SUPPORTED IN DSI MODE\n");
-        return;
+        // With the BIOS select in SCFG_BIOS and the initialization od
+        // SCFG_BIOS depending on the Header->UnitType, we can now boot 
+        // directly in the roms.
+        // There are some more SCFG Settings that change depending on
+        // the unit type, so this is experimental
+        printf("!! DIRECT BOOT NOT STABLE IN DSI MODE\n");
+        DSi::SetupDirectBoot();
     }
 
     u32 bootparams[8];
@@ -2979,6 +2983,12 @@ u16 ARM9IORead16(u32 addr)
 
     case 0x04000300: return PostFlag9;
     case 0x04000304: return PowerControl9;
+
+    case 0x04004000:
+    case 0x04004004:
+    case 0x04004010:
+        // shut up logging for DSi registers
+        return 0;
     }
 
     if ((addr >= 0x04000000 && addr < 0x04000060) || (addr == 0x0400006C))
@@ -3110,6 +3120,12 @@ u32 ARM9IORead32(u32 addr)
 
     case 0x04100010:
         if (!(ExMemCnt[0] & (1<<11))) return NDSCart::ReadROMData();
+        return 0;
+
+    case 0x04004000:
+    case 0x04004004:
+    case 0x04004010:
+        // shut up logging for DSi registers
         return 0;
 
     // NO$GBA debug register "Clock Cycles"

@@ -58,6 +58,9 @@ u32 CartID;
 bool CartIsHomebrew;
 bool CartIsDSi;
 
+NDSHeader Header;
+NDSBanner Banner;
+
 CartCommon* Cart;
 
 u32 Key1_KeyBuf[0x412];
@@ -190,6 +193,7 @@ CartCommon::CartCommon(u8* rom, u32 len, u32 chipid)
 
     u8 unitcode = ROM[0x12];
     IsDSi = (unitcode & 0x02) != 0;
+    DSiBase = *(u16*)&ROM[0x92] << 19;
 }
 
 CartCommon::~CartCommon()
@@ -200,12 +204,14 @@ void CartCommon::Reset()
 {
     CmdEncMode = 0;
     DataEncMode = 0;
+    DSiMode = false;
 }
 
 void CartCommon::SetupDirectBoot()
 {
     CmdEncMode = 2;
     DataEncMode = 2;
+    DSiMode = false; // TODO!!
 }
 
 void CartCommon::DoSavestate(Savestate* file)
@@ -214,6 +220,7 @@ void CartCommon::DoSavestate(Savestate* file)
 
     file->Var32(&CmdEncMode);
     file->Var32(&DataEncMode);
+    file->Bool32(&DSiMode);
 }
 
 void CartCommon::LoadSave(const char* path, u32 type)
@@ -263,13 +270,15 @@ int CartCommon::ROMCommandStart(u8* cmd, u8* data, u32 len)
         case 0x3C:
             CmdEncMode = 1;
             Key1_InitKeycode(false, *(u32*)&ROM[0xC], 2, 2);
+            DSiMode = false;
             return 0;
 
         case 0x3D:
             if (IsDSi)
             {
-                CmdEncMode = 11;
+                CmdEncMode = 1;
                 Key1_InitKeycode(true, *(u32*)&ROM[0xC], 1, 2);
+                DSiMode = true;
             }
             return 0;
 
@@ -277,7 +286,7 @@ int CartCommon::ROMCommandStart(u8* cmd, u8* data, u32 len)
             return 0;
         }
     }
-    else if (CmdEncMode == 1 || CmdEncMode == 11)
+    else if (CmdEncMode == 1)
     {
         // decrypt the KEY1 command as needed
         // (KEY2 commands do not need decrypted because KEY2 is handled entirely by hardware,
@@ -306,14 +315,13 @@ int CartCommon::ROMCommandStart(u8* cmd, u8* data, u32 len)
         case 0x20:
             {
                 u32 addr = (cmddec[2] & 0xF0) << 8;
-                if (CmdEncMode == 11)
+                if (DSiMode)
                 {
                     // the DSi region starts with 0x3000 unreadable bytes
                     // similarly to how the DS region starts at 0x1000 with 0x3000 unreadable bytes
                     // these contain data for KEY1 crypto
-                    u32 dsiregion = *(u16*)&ROM[0x92] << 19;
                     addr -= 0x1000;
-                    addr += dsiregion;
+                    addr += DSiBase;
                 }
                 ReadROM(addr, 0x1000, data, 0);
             }
@@ -594,9 +602,15 @@ void CartRetail::ReadROM_B7(u32 addr, u32 len, u8* data, u32 offset)
     if (addr < 0x8000)
         addr = 0x8000 + (addr & 0x1FF);
 
-    // TODO: protect DSi secure area
-    // also protect DSi region if not unlocked
-    // and other security shenanigans
+    if (IsDSi && (addr >= DSiBase))
+    {
+        // for DSi carts:
+        // * in DSi mode: block the first 0x3000 bytes of the DSi area
+        // * in DS mode: block the entire DSi area
+
+        if ((!DSiMode) || (addr < (DSiBase+0x3000)))
+            addr = 0x8000 + (addr & 0x1FF);
+    }
 
     memcpy(data+offset, ROM+addr, len);
 }
@@ -1498,8 +1512,11 @@ void DecryptSecureArea(u8* out)
     // * .srl ROMs (VC dumps) have encrypted secure areas but have precomputed
     //   decryption data at 0x1000 (and at the beginning of the DSi region if any)
 
-    u32 gamecode = *(u32*)&CartROM[0x0C];
-    u32 arm9base = *(u32*)&CartROM[0x20];
+    u32 gamecode = (u32)Header.GameCode[3] << 24 |
+                   (u32)Header.GameCode[2] << 16 |
+                   (u32)Header.GameCode[1] << 8  |
+                   (u32)Header.GameCode[0];
+    u32 arm9base = Header.ARM9ROMOffset;
 
     memcpy(out, &CartROM[arm9base], 0x800);
 
@@ -1526,11 +1543,17 @@ void DecryptSecureArea(u8* out)
 
 bool LoadROMCommon(u32 filelength, const char *sram, bool direct)
 {
-    u32 gamecode;
-    memcpy(&gamecode, CartROM + 0x0C, 4);
-    printf("Game code: %c%c%c%c\n", gamecode&0xFF, (gamecode>>8)&0xFF, (gamecode>>16)&0xFF, gamecode>>24);
+    memcpy(&Header, CartROM, sizeof(Header));
+    memcpy(&Banner, CartROM + Header.BannerOffset, sizeof(Banner));
 
-    u8 unitcode = CartROM[0x12];
+    printf("Game code: %.4s\n", Header.GameCode);
+
+    u32 gamecode = (u32)Header.GameCode[3] << 24 |
+                   (u32)Header.GameCode[2] << 16 |
+                   (u32)Header.GameCode[1] << 8  |
+                   (u32)Header.GameCode[0];
+
+    u8 unitcode = Header.UnitCode;
     CartIsDSi = (unitcode & 0x02) != 0;
 
     ROMListEntry romparams;
