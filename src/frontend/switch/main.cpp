@@ -135,6 +135,7 @@ float FrametimeHistogram[FrametimeHistogramLen];
 
 int ScreensVisible, FirstBotScreen;
 Gfx::Vector2f ScreenPoints[Frontend::MaxScreenTransforms][4];
+BoxGui::Rect BotScreenRect;
 int ScreenKinds[Frontend::MaxScreenTransforms];
 
 Thread AudioThread;
@@ -425,11 +426,7 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
             HidTouchScreenState touchPosition;
             if (FirstBotScreen != -1)
             {
-                Gfx::Vector2f botScreenSize =
-                {
-                    ScreenPoints[FirstBotScreen][1].X - ScreenPoints[FirstBotScreen][0].X,
-                    ScreenPoints[FirstBotScreen][2].Y - ScreenPoints[FirstBotScreen][0].Y};
-                Gfx::Vector2f botScreenCenter = ScreenPoints[FirstBotScreen][0] + botScreenSize * 0.5f;
+                Gfx::Vector2f botScreenCenter = BotScreenRect.Position + BotScreenRect.Size * 0.5f;
                 if (Config::TouchscreenMode < 2)
                 {
                     HidAnalogStickState rstick = padGetStickPos(&Pad, 1);
@@ -444,8 +441,8 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
                         else
                             UseRealTouchscreen = false;
 
-                        float maxSpeed = std::max(botScreenSize.X, botScreenSize.Y) * 1.5f;
-                        TouchCursorVelocity += rstickVec * std::max(botScreenSize.X, botScreenSize.Y) * 0.125f;
+                        float maxSpeed = std::max(BotScreenRect.Size.X, BotScreenRect.Size.Y) * 1.5f;
+                        TouchCursorVelocity += rstickVec * std::max(BotScreenRect.Size.X, BotScreenRect.Size.Y) * 0.125f;
                         TouchCursorVelocity = TouchCursorVelocity.Clamp({-maxSpeed, -maxSpeed}, {maxSpeed, maxSpeed});
 
                         // allow for quick turns
@@ -471,20 +468,20 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
 
                             // we project the ray from the center of the bottom screen with the direction of the analog stick
                             // onto the border of the bottom screen so we can calculate the distance
-                            float topX = origin.X + direction.X * ((ScreenPoints[FirstBotScreen][0].Y - origin.Y) / direction.Y);
-                            float bottomX = origin.X + direction.X * ((ScreenPoints[FirstBotScreen][2].Y - origin.Y) / direction.Y);
-                            float leftY = origin.Y + direction.Y * ((ScreenPoints[FirstBotScreen][0].X - origin.X) / direction.X);
-                            float rightY = origin.Y + direction.Y * ((ScreenPoints[FirstBotScreen][1].X - origin.X) / direction.X);
+                            float topX = origin.X + direction.X * ((BotScreenRect.Position.Y - origin.Y) / direction.Y);
+                            float bottomX = origin.X + direction.X * ((BotScreenRect.Position.Y + BotScreenRect.Size.Y - origin.Y) / direction.Y);
+                            float leftY = origin.Y + direction.Y * ((BotScreenRect.Position.X - origin.X) / direction.X);
+                            float rightY = origin.Y + direction.Y * ((BotScreenRect.Position.X + BotScreenRect.Size.X - origin.X) / direction.X);
 
                             Gfx::Vector2f hitPoint;
-                            if (topX >= ScreenPoints[FirstBotScreen][0].X && topX < ScreenPoints[FirstBotScreen][1].X)
-                                hitPoint = {topX, ScreenPoints[FirstBotScreen][0].Y};
-                            else if (bottomX >= ScreenPoints[FirstBotScreen][0].X && bottomX < ScreenPoints[FirstBotScreen][1].X)
-                                hitPoint = {bottomX, ScreenPoints[FirstBotScreen][2].Y};
-                            else if (leftY >= ScreenPoints[FirstBotScreen][0].Y && leftY < ScreenPoints[FirstBotScreen][2].Y)
-                                hitPoint = {ScreenPoints[FirstBotScreen][0].X, leftY};
-                            else if (rightY >= ScreenPoints[FirstBotScreen][0].Y && rightY < ScreenPoints[FirstBotScreen][2].Y)
-                                hitPoint = {ScreenPoints[FirstBotScreen][1].X, rightY};
+                            if (topX >= BotScreenRect.Position.X && topX < BotScreenRect.Position.X + BotScreenRect.Size.X)
+                                hitPoint = {topX, BotScreenRect.Position.Y};
+                            else if (bottomX >= BotScreenRect.Position.X && bottomX < BotScreenRect.Position.X + BotScreenRect.Size.X)
+                                hitPoint = {bottomX, BotScreenRect.Position.Y + BotScreenRect.Size.Y};
+                            else if (leftY >= BotScreenRect.Position.Y && leftY < BotScreenRect.Position.Y + BotScreenRect.Size.Y)
+                                hitPoint = {BotScreenRect.Position.X, leftY};
+                            else if (rightY >= BotScreenRect.Position.Y && rightY < BotScreenRect.Position.Y + BotScreenRect.Size.Y)
+                                hitPoint = {BotScreenRect.Position.X + BotScreenRect.Size.X, rightY};
 
                             TouchCursorPosition = origin + rstickVec * sqrtf((hitPoint - origin).LengthSqr());
                         }
@@ -548,7 +545,7 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
                     }
 
                     TouchCursorPosition = botScreenCenter
-                        + Gfx::Vector2f{xAngle / (float)M_PI * 10.f, -yAngle / (float)M_PI * 10.f} * std::max(botScreenSize.X, botScreenSize.Y);
+                        + Gfx::Vector2f{xAngle / (float)M_PI * 10.f, -yAngle / (float)M_PI * 10.f} * std::max(BotScreenRect.Size.X, BotScreenRect.Size.Y);
 
                     if (keysDown & (!Config::LeftHandedMode
                         ? HidNpadButton_ZL : HidNpadButton_ZR))
@@ -561,24 +558,24 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
                     UseRealTouchscreen = true;
                 }
 
-                if (TouchCursorPosition.X < ScreenPoints[FirstBotScreen][0].X)
+                if (TouchCursorPosition.X < BotScreenRect.Position.X)
                 {
-                    TouchCursorPosition.X = ScreenPoints[FirstBotScreen][0].X - 1.f;
+                    TouchCursorPosition.X = BotScreenRect.Position.X - 1.f;
                     touchUseCursor = false;
                 }
-                if (TouchCursorPosition.X >= ScreenPoints[FirstBotScreen][1].X)
+                if (TouchCursorPosition.X >= BotScreenRect.Position.X + BotScreenRect.Size.X)
                 {
-                    TouchCursorPosition.X = ScreenPoints[FirstBotScreen][1].X + 1.f;
+                    TouchCursorPosition.X = BotScreenRect.Position.X + BotScreenRect.Size.X + 1.f;
                     touchUseCursor = false;
                 }
-                if (TouchCursorPosition.Y < ScreenPoints[FirstBotScreen][0].Y)
+                if (TouchCursorPosition.Y < BotScreenRect.Position.Y)
                 {
-                    TouchCursorPosition.Y = ScreenPoints[FirstBotScreen][0].Y - 1.f;
+                    TouchCursorPosition.Y = BotScreenRect.Position.Y - 1.f;
                     touchUseCursor = false;
                 }
-                if (TouchCursorPosition.Y >= ScreenPoints[FirstBotScreen][2].Y)
+                if (TouchCursorPosition.Y >= BotScreenRect.Position.Y + BotScreenRect.Size.Y)
                 {
-                    TouchCursorPosition.Y = ScreenPoints[FirstBotScreen][2].Y + 1.f;
+                    TouchCursorPosition.Y = BotScreenRect.Position.Y + BotScreenRect.Size.Y + 1.f;
                     touchUseCursor = false;
                 }
             }
@@ -915,9 +912,20 @@ void UpdateScreenLayout()
     FirstBotScreen = -1;
     for (int i = 0; i < ScreensVisible; i++)
     {
-        if (FirstBotScreen == -1 && ScreenKinds[i] == 1)
-            FirstBotScreen = i;
         DeriveScreenPoints(matrices[i], ScreenPoints[i], invTouchScale);
+        if (FirstBotScreen == -1 && ScreenKinds[i] == 1)
+        {
+            FirstBotScreen = i;
+            Gfx::Vector2f lowerBounds = {infinityf(), infinityf()};
+            Gfx::Vector2f upperBounds = {-infinityf(), -infinityf()};
+            for (int j = 0; j < 4; j++)
+            {
+                lowerBounds = lowerBounds.Min(ScreenPoints[i][j]);
+                upperBounds = upperBounds.Max(ScreenPoints[i][j]);
+            }
+            BotScreenRect.Position = lowerBounds;
+            BotScreenRect.Size = upperBounds - lowerBounds;
+        }
     }
 }
 
