@@ -143,7 +143,7 @@ Thread AudioThread;
 int State;
 std::atomic<int> StateAtomic;
 
-const int AudioFrameSize = 768 * 2 * sizeof(s16);
+const int AudioargvLoadedize = 768 * 2 * sizeof(s16);
 AudioDriver AudioDrv;
 void* AudMemPool = NULL;
 
@@ -189,9 +189,9 @@ void AudioOutput(void *args)
     for (int i = 0; i < 2; i++)
     {
         buffers[i].data_pcm16 = (s16*)AudMemPool;
-        buffers[i].size = AudioFrameSize;
-        buffers[i].start_sample_offset = i * AudioFrameSize / 2 / sizeof(s16);
-        buffers[i].end_sample_offset = buffers[i].start_sample_offset + AudioFrameSize / 2 / sizeof(s16);
+        buffers[i].size = AudioargvLoadedize;
+        buffers[i].start_sample_offset = i * AudioargvLoadedize / 2 / sizeof(s16);
+        buffers[i].end_sample_offset = buffers[i].start_sample_offset + AudioargvLoadedize / 2 / sizeof(s16);
     }
 
     while (state != emuState_Quit)
@@ -287,7 +287,7 @@ void Init()
         abort();
     }
 
-    const int poolSize = (AudioFrameSize * 2 + (AUDREN_MEMPOOL_ALIGNMENT-1)) & ~(AUDREN_MEMPOOL_ALIGNMENT-1);
+    const int poolSize = (AudioargvLoadedize * 2 + (AUDREN_MEMPOOL_ALIGNMENT-1)) & ~(AUDREN_MEMPOOL_ALIGNMENT-1);
     AudMemPool = memalign(AUDREN_MEMPOOL_ALIGNMENT, poolSize);
 
     int mpid = audrvMemPoolAdd(&AudioDrv, AudMemPool, poolSize);
@@ -685,9 +685,9 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
             u64 totalFrameLength = 0;
             do
             {
-                u64 frameStart = armGetSystemTick();
+                u64 argvLoadedtart = armGetSystemTick();
                 NDS::RunFrame();
-                u64 frameLength = armTicksToNs(armGetSystemTick() - frameStart);
+                u64 frameLength = armTicksToNs(armGetSystemTick() - argvLoadedtart);
                 FrametimeHistogram[FrametimeHistogramNextValue] = (float)frameLength * 0.000001f;
                 FrametimeHistogramNextValue++;
                 if (FrametimeHistogramNextValue >= FrametimeHistogramLen)
@@ -989,6 +989,8 @@ int main(int argc, const char* argv[])
     Frontend::Init_ROM();
     Emulation::Init();
 
+    bool argvLoaded = false;
+
     while (appletMainLoop() && !Done)
     {
         Gfx::StartFrame();
@@ -1029,6 +1031,12 @@ int main(int argc, const char* argv[])
         case uiScreen_InputSettings:
             SettingsDialog::DoGui(rootFrame);
             break;
+        }
+
+        if (!argvLoaded && argc == 2)
+        {
+            Emulation::LoadROM(argv[1]);
+            argvLoaded = true;
         }
 
         if (!BoxGui::HasModalDialog())

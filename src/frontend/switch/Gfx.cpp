@@ -525,7 +525,7 @@ void PopScissor()
 
 void DebugOutput(void* userData, const char* context, DkResult result, const char* message)
 {
-    printf("deko debug %d %s", result, message);
+    printf("deko debug %d %s\n", result, message);
 }
 
 void Init()
@@ -798,8 +798,11 @@ void EndFrame(Color clearColor, int rotation)
         imageDescriptors[i].initialize(view);
     }
 
-    PresentCmdBuf.bindSamplerDescriptorSet(DataHeap->GpuAddr(SamplerDescriptor), 4);
-    PresentCmdBuf.bindImageDescriptorSet(DataHeap->GpuAddr(ImageDescriptors[SwapchainSlot]), UsedTextures.size());
+    if (UsedTextures.size() > 0)
+    {
+        PresentCmdBuf.bindSamplerDescriptorSet(DataHeap->GpuAddr(SamplerDescriptor), 4);
+        PresentCmdBuf.bindImageDescriptorSet(DataHeap->GpuAddr(ImageDescriptors[SwapchainSlot]), UsedTextures.size());
+    }
 
     u32 indexBufferOffset = 0;
 
