@@ -114,7 +114,7 @@ compile_shader_instance(comp ../../shaders/GPU3D_Comp SortWork "SortWork")
 
 message("${shader_paths}")
 add_custom_target(melonDS.nro ALL
-    ${ELF2NRO} ${CMAKE_BINARY_DIR}/melonDS.elf ${CMAKE_BINARY_DIR}/melonDS.nro --icon=${CMAKE_SOURCE_DIR}/icon/melon_switch.jpg --nacp=${CMAKE_BINARY_DIR}/control.nacp --romfsdir=${CMAKE_BINARY_DIR}/romfs
+    ${ELF2NRO} ${CMAKE_BINARY_DIR}/melonDS.elf.elf ${CMAKE_BINARY_DIR}/melonDS.nro --icon=${CMAKE_SOURCE_DIR}/icon/melon_switch.jpg --nacp=${CMAKE_BINARY_DIR}/control.nacp --romfsdir=${CMAKE_BINARY_DIR}/romfs
     DEPENDS melonDS.elf
     ${CMAKE_BINARY_DIR}/control.nacp
     "${shader_paths}")

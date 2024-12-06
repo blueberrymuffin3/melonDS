@@ -2,6 +2,36 @@ project(core)
 
 set (CMAKE_CXX_STANDARD 17)
 
+# STUFF COPIED FROM TOOLCHAIN FILE
+find_program(ELF2NRO elf2nro)
+find_program(NACPTOOL nacptool)
+find_program(UAM uam)
+
+function(compile_shader stage relativepath)
+	get_filename_component(filename ${relativepath} NAME_WE)
+	list(APPEND shader_paths ${CMAKE_BINARY_DIR}/romfs/shaders/${filename}.dksh)
+	set(shader_paths ${shader_paths} PARENT_SCOPE)
+	add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/romfs/shaders/${filename}.dksh
+        COMMAND ${UAM} --stage=${stage} --out ${CMAKE_BINARY_DIR}/romfs/shaders/${filename}.dksh ${CMAKE_CURRENT_SOURCE_DIR}/${relativepath}.glsl
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${relativepath}.glsl)
+endfunction()
+
+function(compile_shader_instance stage relativepath newname defines)
+	file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/generated_shaders)
+
+	foreach(var IN ITEMS ${defines})
+		set(${var} 1)
+	endforeach()
+
+	configure_file(${CMAKE_CURRENT_SOURCE_DIR}/${relativepath}.glsl ${CMAKE_BINARY_DIR}/generated_shaders/${newname}.glsl)
+	list(APPEND shader_paths ${CMAKE_BINARY_DIR}/romfs/shaders/${newname}.dksh)
+	set(shader_paths ${shader_paths} PARENT_SCOPE)
+	add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/romfs/shaders/${newname}.dksh
+        COMMAND ${UAM} --stage=${stage} --out ${CMAKE_BINARY_DIR}/romfs/shaders/${newname}.dksh ${CMAKE_BINARY_DIR}/generated_shaders/${newname}.glsl
+        DEPENDS ${CMAKE_BINARY_DIR}/generated_shaders/${newname}.glsl)
+endfunction()
+# END STUFF COPIED FROM TOOLCHAIN FILE
+
 add_library(core STATIC
 	ARCodeFile.cpp
 	AREngine.cpp
