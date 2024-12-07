@@ -32,6 +32,8 @@
 #include "mm_vec/mm_vec.h"
 
 #include <string.h>
+#include <switch/audio/audio.h>
+#include <switch/services/audin.h>
 
 bool Done = false;
 int CurrentUiScreen = uiScreen_Start;
@@ -146,6 +148,19 @@ std::atomic<int> StateAtomic;
 const int AudioFrameSize = 768 * 2 * sizeof(s16);
 AudioDriver AudioDrv;
 void* AudMemPool = NULL;
+
+const u32 EmuAudioInputSampleRate = 44100;
+const int EmuAudioInputBufferLen = 735;
+s16 EmuAudioInputBuffer[EmuAudioInputBufferLen];
+
+const u32 SwitchAudioInputSampleRate = 48000;
+const u32 SwitchAudioInputChannelCount = 2;
+const int SwitchAudioInputBufferLen = (EmuAudioInputBufferLen * SwitchAudioInputSampleRate / EmuAudioInputSampleRate) * SwitchAudioInputChannelCount;
+const int SwitchAudioInputBufferDataSize = SwitchAudioInputBufferLen * sizeof(s16);
+const int SwitchAudioInputBufferSize = (SwitchAudioInputBufferDataSize + 0xfff) & ~0xfff;
+const int SwitchAudioInputBufferCount = 2;
+u32 SwitchAudioInputBufferReleasedCount = 0;
+AudioInBuffer SwitchAudioInputBuffers[SwitchAudioInputBufferCount];
 
 bool TouchHeld;
 Gfx::Vector2f TouchCursorVelocity;
@@ -312,6 +327,33 @@ void Init()
     threadCreate(&AudioThread, AudioOutput, nullptr, nullptr, 1024*32, 0x20, 0);
     threadStart(&AudioThread);
 
+    if (!R_SUCCEEDED(code = audinInitialize()))
+    {
+        printf("audinInitialize failed! %d\n", code);
+        abort();
+    }
+
+    if (!R_SUCCEEDED(code = audinStartAudioIn()))
+    {
+        printf("audinStartAudioIn failed! %d\n", code);
+        abort();
+    }
+
+    for (int i = 0; i < SwitchAudioInputBufferCount; i++) {
+        AudioInBuffer *buffer = &SwitchAudioInputBuffers[i];
+        memset(buffer, 0, sizeof(AudioInBuffer));
+        buffer->buffer = memalign(0x1000, SwitchAudioInputBufferSize);
+        buffer->buffer_size = SwitchAudioInputBufferSize;
+        buffer->data_size = SwitchAudioInputBufferDataSize;
+        if (!R_SUCCEEDED(code = audinAppendAudioInBuffer(buffer))) {
+            printf("audinAppendAudioInBuffer failed! %d\n", code);
+            abort();
+        }
+    }
+
+    memset(EmuAudioInputBuffer, 0, sizeof(EmuAudioInputBuffer));
+    Frontend::Mic_SetExternalBuffer(EmuAudioInputBuffer, EmuAudioInputBufferLen);
+
     hidGetSixAxisSensorHandles(JoyconSixaxisHandles, 2, HidNpadIdType_No1, HidNpadStyleTag_NpadJoyDual);
     hidGetSixAxisSensorHandles(&ConsoleSixAxisHandle, 1, HidNpadIdType_Handheld, HidNpadStyleTag_NpadHandheld);
     hidGetSixAxisSensorHandles(&FullKeySixAxisHandle, 1, HidNpadIdType_No1, HidNpadStyleTag_NpadFullKey);
@@ -333,6 +375,13 @@ void DeInit()
 
     threadWaitForExit(&AudioThread);
     threadClose(&AudioThread);
+
+    audinStopAudioIn();
+    audinExit();
+    for(int i = 0; i < SwitchAudioInputBufferCount; i++){
+        AudioInBuffer *buffer = &SwitchAudioInputBuffers[i];
+        free(buffer->buffer);
+    }
 
     GPU::DeInitRenderer();
     NDS::DeInit();
@@ -668,10 +717,26 @@ void UpdateAndDraw(u64& keysDown, u64& keysUp)
                 }
             }
 
-            if (feedMicNoise)
+            if (feedMicNoise) {
                 Frontend::Mic_FeedNoise();
-            else
-                Frontend::Mic_FeedSilence();
+            } else {
+                Result code;
+
+                AudioInBuffer *releaseAudioInBuffer = nullptr;
+                if (!R_SUCCEEDED(code = audinGetReleasedAudioInBuffer(&releaseAudioInBuffer, &SwitchAudioInputBufferReleasedCount))) {
+                    printf("audinGetReleasedAudioInBuffer failed! %d\n", code);
+                } else if (releaseAudioInBuffer != nullptr) {
+                    Frontend::AudioIn_Resample((s16*)releaseAudioInBuffer->buffer, SwitchAudioInputBufferLen / SwitchAudioInputChannelCount, EmuAudioInputBuffer, EmuAudioInputBufferLen);
+                    Frontend::Mic_FeedExternalBuffer();
+                    if (!R_SUCCEEDED(code = audinAppendAudioInBuffer(releaseAudioInBuffer))) {
+                        printf("audinAppendAudioInBuffer failed! %d\n", code);
+                        abort();
+                    }
+                } else {
+                    printf("Audio Input Underflow\n");
+                }
+            }
+
             NDS::SetKeyMask(keyMask);
             if (TouchDown)
                 NDS::TouchScreen((u16)TouchFinalPositionX, (u16)TouchFinalPositionY);

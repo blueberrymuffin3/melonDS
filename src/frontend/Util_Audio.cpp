@@ -80,6 +80,25 @@ void AudioOut_Resample(s16* inbuf, int inlen, s16* outbuf, int outlen, int volum
     }
 }
 
+void AudioIn_Resample(s16* inbuf, int inlen, s16* outbuf, int outlen)
+{
+    float res_incr = inlen / (float)outlen;
+    float res_timer = 0;
+    int res_pos = 0;
+
+    for (int i = 0; i < outlen; i++)
+    {
+        outbuf[i] = (inbuf[res_pos*2] + (int)inbuf[res_pos*2+1]) / 2;
+
+        res_timer += res_incr;
+        while (res_timer >= 1.0)
+        {
+            res_timer -= 1.0;
+            res_pos++;
+        }
+    }
+}
+
 
 void Mic_FeedSilence()
 {

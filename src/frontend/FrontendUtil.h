@@ -174,6 +174,9 @@ int AudioOut_GetNumSamples(int outlen);
 // note: this assumes the output buffer is interleaved stereo
 void AudioOut_Resample(s16* inbuf, int inlen, s16* outbuf, int outlen, int volume);
 
+// Same as AudioOut_Resample, except also downsamples to mono
+void AudioIn_Resample(s16* inbuf, int inlen, s16* outbuf, int outlen);
+
 // feed silence to the microphone input
 void Mic_FeedSilence();
 
